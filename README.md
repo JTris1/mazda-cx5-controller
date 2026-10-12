@@ -1,6 +1,7 @@
 # ESP32 Climate Remote for the Mazda CX-5
 
-> **NOTE:** This project (and most of this README) was developed heavily with AI assistance (Claude Code). If you have a problem with AI, I totally understand. Feel free to use this as a reference and build your own version, or stop reading here. 
+> [!WARNING]
+> This project (and most of this README) was developed heavily with AI assistance (Claude Code). If you have a problem with AI, I totally understand. Feel free to use this as a reference and build your own version, or stop reading here. 
 > 
 > I know a good bit of programming, but I have very little experience with embedded platforms and am frankly out of practice. I would expect bugs and AI nonsense if you decide to use this. Once I actually get around to building the hardware side of this project, I plan to review the code and try to weed out any weird AI quirks that may exist.
 >
@@ -10,6 +11,7 @@ Remote control for a car's climate controls, built around an ESP32-S3 and a cell
 modem. The goal is to warm up (or cool down) the cabin before you get in, without paying
 a monthly subscription to the manufacturer.
 
+> [!NOTE]
 > **Status: early prototype.** The bench-test firmware is written and compiles, but it
 > has not yet been tested in a car. Cellular connectivity and the remote-start trigger
 > are planned but not built. See [Roadmap](#roadmap).
