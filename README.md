@@ -1,89 +1,228 @@
-# CX-5 climate remote: phase 1 (bench test)
+# ESP32 Climate Remote for the Mazda CX-5
 
-Local-only firmware: six bench buttons and a USB serial console drive six PC817
-optocouplers through an MCP23017 I2C expander. No modem, no MQTT yet. The
-`enqueuePress()` / `enqueueTemp()` entry points are what the SMS/MQTT layer will call
-in phase 2.
+> **NOTE:** This project (and most of this README) was developed heavily with AI assistance (Claude Code). If you have a problem with AI, I totally understand. Feel free to use this as a reference and build your own version, or stop reading here. 
+> 
+> I know a good bit of programming, but I have very little experience with embedded platforms and am frankly out of practice. I would expect bugs and AI nonsense if you decide to use this. Once I actually get around to building the hardware side of this project, I plan to review the code and try to weed out any weird AI quirks that may exist.
+>
+> Also, I know this README kinda blows because Claude wrote it. I made some edits, but it is still kind of difficult to follow.
 
-## Wiring (per channel)
+Remote control for a car's climate controls, built around an ESP32-S3 and a cellular
+modem. The goal is to warm up (or cool down) the cabin before you get in, without paying
+a monthly subscription to the manufacturer.
+
+> **Status: early prototype.** The bench-test firmware is written and compiles, but it
+> has not yet been tested in a car. Cellular connectivity and the remote-start trigger
+> are planned but not built. See [Roadmap](#roadmap).
+
+## What it does
+
+The firmware presses the buttons on your car's climate control panel for you. A small
+microcontroller drives optocouplers that connect directly to the panel's switch pads, so
+the panel sees the same signal it would see from a finger on the button.
+
+It can currently:
+
+- Raise or lower the driver's temperature setting, one step at a time
+- Set an exact temperature (for example `temp 72`)
+- Press the driver and passenger seat heater buttons
+- Press the front and rear defrost buttons
+- Accept commands from physical buttons on a breadboard or from a USB serial console
+
+Planned (not yet implemented): trigger a remote-start module, receive commands over a cellular connection with MQTT and Home Assistant, implement CAN bus reading which can be broadcast over an on-demand wifi network, and report battery voltage and status.
+
+## Why this approach
+
+Mazda keeps their climate settings on an internal network. I couldn't find a way to send update signals through CAN or LIN to change the values. Simulating a button press is the only way I could figure out how to make this work, and it is probably the easiest route anyways. The downside is that you must physically wire into the climate panel, which means soldering fine wires to its circuit board.
+
+The target vehicle is a 2022 Mazda CX-5 Turbo Signature with heated and ventilated seats and automatic climate control. Other vehicles may work if their buttons are simple switches, but you will have to work out the wiring
+yourself.
+
+## How it works
 
 ```
-MCP23017 pin ──220R──► PC817 pin1 (LED anode)
-             └─10k──► GND            (keeps the opto off while the expander resets)
-GND ◄─────────────── PC817 pin2 (LED cathode)
-CCU 5V pad ◄───────── PC817 pin4 (collector)
-CCU GND pad ◄──────── PC817 pin3 (emitter)   (temp up + down share the dial's centre pin)
+ Command source                 ESP32-S3                    Climate panel
+ --------------                 --------                    -------------
+ Serial console  ----\                                 /--> Temperature up/down
+ Bench buttons   -----+--> command queue --> I2C       |--> Seat heater (driver)
+ (later) MQTT    ----/      (FreeRTOS task)   expander -+--> Seat heater (passenger)
+                                              + opto-   |--> Front defrost
+                                              couplers  \--> Rear defrost
 ```
 
-MCP23017: VDD to 3V3, VSS to GND, RESET to 3V3, A0/A1/A2 to GND (address 0x20),
-SDA to GPIO 3, SCL to GPIO 2 (the board's I2C pins; 4.7k pull-ups to 3V3 if your
-breakout lacks them).
+Each button is "pressed" by briefly turning on an optocoupler (a PC817) that connects
+the button's two pads together. An I2C expander (MCP23017) provides the output pins, so
+adding more buttons later does not use up the ESP32's GPIOs.
 
-| Function         | Pin            | CCU pad                          |
-|------------------|----------------|----------------------------------|
-| Temp up          | MCP GPA0       | dial switch pin 3 (right)        |
-| Temp down        | MCP GPA1       | dial switch pin 1 (left)         |
-| Seat driver      | MCP GPA2       | seat button pad (TBD)            |
-| Seat passenger   | MCP GPA3       | seat button pad (TBD)            |
-| Front defrost    | MCP GPA4       | defrost button pad (TBD)         |
-| Rear defrost     | MCP GPA5       | defrost button pad (TBD)         |
-| Button temp up   | GPIO 15        | to GND                           |
-| Button temp down | GPIO 16        | to GND                           |
-| Button seat drv  | GPIO 14        | to GND                           |
-| Button seat pas  | GPIO 21        | to GND                           |
-| Button front def | GPIO 38        | to GND                           |
-| Button rear def  | GPIO 39        | to GND                           |
-| 12 V sense       | GPIO 9         | 220k/47k divider + 100 nF        |
+Because the car does not report its current setpoint (as far as I currently know), temperature is set by pressing
+down enough times to reach the lowest setting, then pressing up the right number of
+times. This takes a few seconds and needs a one-time calibration (see below).
 
-Pins are for the T-SIM7670G-S3 **Standard** board. Never use 4, 5, 6, 7, 46 (modem),
-8 (battery ADC) or 42 (power-save). Confirm 9, 14, 21 are on your headers; change them in
-`src/pins.h` if not. Still free: GPIO 40, 41, 47 and MCP GPA6-7 / GPB0-7.
+## What you need
 
-On day one do not connect the CCU: put LEDs or a multimeter on the opto outputs first.
+### Hardware
 
-## Build and flash from WSL2
+| Item | Notes |
+|---|---|
+| LilyGO T-SIM7670G-S3 **Standard** board | ESP32-S3 with a cellular modem. The modem is not used yet. Remove the 18650 battery holder. |
+| MCP23017 I2C expander breakout | Provides the output pins |
+| 6 x PC817 optocouplers | One per button, or two 4-channel PC847 chips |
+| 6 x 220 ohm and 6 x 10 kohm resistors | LED resistors and pull-downs |
+| 6 x momentary push buttons | Bench testing only |
+| 30 AWG wire | Thin and flexible so you do not lift pads off the panel |
+
+For a car installation you will also need:
+
+| Item | Notes |
+|---|---|
+| 12 V to 5 V buck converter | Choose one with very low idle current (under 1 mA) if the car will sit for days. A cheap module can draw 10 mA and slowly drain the battery. |
+| Fuse (about 1A) and TVS diode | Protects against shorts and voltage spikes |
+| Connector for the panel housing (optional) | A GX16 8-pin solder-type connector works without special crimping tools. |
+
+### Software
+
+- [PlatformIO](https://platformio.org/) (command line or the VS Code extension)
+- Git
+
+## Building the hardware
+
+> Always start on the bench with LEDs instead of the car. Only connect to the climate
+> panel once the bench tests below pass.
+
+### 1. Wire one output channel
+
+Each channel looks like this:
+
+```
+Expander pin --[220 ohm]--> PC817 pin 1 (LED anode)
+Expander pin --[10 kohm]--> GND        (keeps the output off while powering up)
+PC817 pin 2 (LED cathode) --> GND
+PC817 pin 4 (collector)   --> panel pad (the pad that sits at 5 V)
+PC817 pin 3 (emitter)     --> panel ground pad
+```
+
+For bench testing, replace the panel pads with a 5 V source, a 1 kohm resistor, and an
+LED, so you can see each press.
+
+### 2. Connect the expander
+
+| MCP23017 | Connects to |
+|---|---|
+| VDD / RESET | 3.3 V |
+| VSS | GND |
+| A0, A1, A2 | GND (address 0x20) |
+| SDA | GPIO 3 |
+| SCL | GPIO 2 |
+
+### 3. Assign the channels
+
+| Function | Expander pin | Bench button GPIO |
+|---|---|---|
+| Temperature up | GPA0 | 15 |
+| Temperature down | GPA1 | 16 |
+| Driver seat heater | GPA2 | 14 |
+| Passenger seat heater | GPA3 | 21 |
+| Front defrost | GPA4 | 38 |
+| Rear defrost | GPA5 | 39 |
+
+Wire each bench button between its GPIO and GND. An optional 12 V battery sense uses
+GPIO 9 through a 220 kohm / 47 kohm divider and a 100 nF capacitor.
+
+These pins are for the Standard version of the LilyGO board. Do not use GPIOs 4, 5, 6,
+7, 8, 42 or 46: they are connected to the modem and other on-board parts. Check that
+GPIOs 9, 14 and 21 are brought out on your board's headers, or change them in
+[`src/pins.h`](src/pins.h).
+
+### 4. Connect to the climate panel (later)
+
+The temperature dial on the CX-5 is a small spring-return switch with three pads in a
+row on the top side. With a multimeter, confirm which pad is ground and which pads drop
+to 0 V when pressed. The other buttons are simple two-pad push buttons. Connect one
+optocoupler per button: collector to the pad that sits at 5 V, emitter to the ground pad.
+
+Pad voltages and layouts differ between models and model years. Measure before you
+connect anything.
+
+## Building the software
+
+PlatformIO runs on Windows, macOS and Linux. The project has been built on Linux,
+and a Linux or macOS machine is the easiest place to build it.
 
 ```bash
-python3 -m venv ~/.venvs/pio && ~/.venvs/pio/bin/pip install platformio
-cd ~/esp32-mazda-controller && ~/.venvs/pio/bin/pio run
+git clone <this-repository-url>
+cd esp32-mazda-controller
+pio run                  # build
+pio run -t upload        # flash the board over USB
+pio device monitor       # open the serial console at 115200 baud
 ```
 
-Build in WSL (keep a copy on the Linux filesystem, not `/mnt/c`, for speed).
-The S3's native USB re-enumerates when it resets, which makes `usbipd` attachments
-flaky. The reliable route is to flash from Windows:
+If the upload fails, put the board into download mode: hold BOOT, tap RESET, then
+release BOOT, and try again.
 
-```powershell
-# one-time, Windows:  pip install esptool
-# copy bootloader.bin, partitions.bin, firmware.bin from .pio/build/tsim7670g-s3/
-# and boot_app0.bin from ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/
-esptool.py --chip esp32s3 --port COM5 write_flash 0x0 bootloader.bin 0x8000 partitions.bin 0xe000 boot_app0.bin 0x10000 firmware.bin
-```
+### Using the serial console
 
-(`pio run -t upload` works too once the board is attached with
-`usbipd attach --wsl --auto-attach --busid <id>`. If it fails mid-way, hold BOOT, tap
-RESET, release BOOT to force download mode.)
-
-## Console
-
-| Command | Effect |
+| Command | What it does |
 |---|---|
-| `temp 72` / `temp lo` / `temp hi` | absolute: press down enough to clamp at LO, then count up (`hi` presses up until clamped) |
-| `up [n]`, `down [n]` | relative temperature steps |
-| `seatd [n]`, `seatp [n]` | seat heater button presses |
-| `deff [n]`, `defr [n]` | front / rear defrost button presses |
-| `tempcal <minF> <maxF> <steps> [loOffset]` | calibrate the dial, saved to flash |
-| `press <ms>`, `gap <ms>` | pulse width and gap, saved to flash |
-| `stop` | abort the running sequence and clear the queue |
-| `vbat`, `status`, `help` | |
+| `temp 72` | Set an absolute temperature in degrees F |
+| `temp lo` / `temp hi` | Go to the lowest or highest setting |
+| `up [n]` / `down [n]` | Step the temperature up or down n times |
+| `seatd [n]` / `seatp [n]` | Press the driver or passenger seat heater button |
+| `deff [n]` / `defr [n]` | Press the front or rear defrost button |
+| `press <ms>` / `gap <ms>` | Set how long each press lasts and the pause between presses |
+| `tempcal <minF> <maxF> <steps> [loOffset]` | Calibrate the temperature range |
+| `stop` | Abort whatever is running |
+| `status` / `help` | Show settings or the command list |
 
-## Things to measure on the car
+### Calibrating temperature
 
-1. Smallest `press` that reliably registers (start at 80 ms).
-2. Smallest `gap` that never drops a click.
-3. Dial range: with `temp lo`, press `up` and count to the first and last displayed
-   temperature, then enter it with `tempcal`. Check whether LO (and HI) are separate
-   positions beyond the numeric range (that's `loOffset`).
-4. Does the first press on a sleeping CCU only wake the display? If so we need a dummy
-   press before counting.
-5. What one seat-heater press does (cycle order, whether it wraps to off) and whether
-   seat and defrost state reset at ignition. There is no state feedback until CAN.
+The defaults (60 to 84 F in 24 steps) are only a starting guess. In the car:
+
+1. Run `temp lo`, then `up` one press at a time and note the first and last
+   temperatures shown and how many presses it takes.
+2. Enter them with `tempcal <min> <max> <steps>`. If the lowest setting is a separate
+   "LO" position below the first number, pass the number of extra presses as `loOffset`.
+3. Test with `temp 72` and adjust.
+
+Calibration is saved on the board and survives a restart.
+
+## Testing
+
+A step-by-step test plan lives in [`docs/bench-test.md`](docs/bench-test.md). It starts
+with verifying the board boots and finds the expander, then each channel using LEDs,
+reset glitch checks, the buttons, absolute temperature, and finally the car.
+
+## Roadmap
+
+1. **Bench and in-car testing** of the current firmware (in progress)
+2. **Cellular connection:** the modem stays connected and the ESP32 sleeps lightly, so
+   commands arrive over MQTT within seconds without SMS charges
+3. **Signed commands:** every message is digitally signed so nobody else can control
+   the car
+4. **Remote start trigger** for an aftermarket module, and engine-running detection
+5. **Home Assistant integration** with buttons and status
+6. **Battery protection:** report battery voltage and refuse commands when it is low
+7. **Vehicle data over CAN** for temperature feedback and telemetry
+8. **Climate data over LIN** (maybe, not sure if this is even possible yet)
+8. **A custom PCB** that carries the LilyGO board, so no breadboard is needed
+
+## Project layout
+
+```
+src/main.cpp      Firmware: command queue, buttons, serial console
+src/mcp23017.h    Small driver for the I2C expander
+src/pins.h        Pin assignments
+src/config.h      Timing and safety limits
+docs/             Bench test plan and design notes
+platformio.ini    Build configuration
+```
+
+Design decisions, the security model, and the reasoning behind the connectivity choices
+are written up in [`docs/design-notes.md`](docs/design-notes.md).
+
+## Contributing
+
+Issues and suggestions are welcome, especially wiring notes and test results for other
+vehicles. If you try this on another car, please record what you measured.
+
+## License
+
+No license has been chosen yet.
