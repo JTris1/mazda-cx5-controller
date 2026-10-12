@@ -1,4 +1,4 @@
-# ESP32 Climate Remote for the Mazda CX-5
+# ESP32 Climate Control for the Mazda CX-5
 
 > [!WARNING]
 > This project (and most of this README) was developed heavily with AI assistance (Claude Code). If you have a problem with AI, I totally understand. Feel free to use this as a reference and build your own version, or stop reading here. 
@@ -7,14 +7,15 @@
 >
 > Also, I know this README kinda blows because Claude wrote it. I made some edits, but it is still kind of difficult to follow.
 
-Remote control for a car's climate controls, built around an ESP32-S3 and a cellular
+Remote control for the Mazda CX-5's climate controls, built around an ESP32-S3 and a cellular
 modem. The goal is to warm up (or cool down) the cabin before you get in, without paying
-a monthly subscription to the manufacturer.
+a monthly subscription to the manufacturer. Ideally, this will be paired with a remote starter,
+or with Mazda's Connected Services remote start subscription. But neither are required.
 
 > [!NOTE]
 > **Status: early prototype.** The bench-test firmware is written and compiles, but it
-> has not yet been tested in a car. Cellular connectivity and the remote-start trigger
-> are planned but not built. See [Roadmap](#roadmap).
+> has not yet been tested in a car. See [Build Log](#buildlog) for my latest physical build updates.
+> Cellular connectivity and the remote-start trigger are planned but not built. See [Roadmap](#roadmap).
 
 ## What it does
 
@@ -36,8 +37,7 @@ Planned (not yet implemented): trigger a remote-start module, receive commands o
 
 Mazda keeps their climate settings on an internal network. I couldn't find a way to send update signals through CAN or LIN to change the values. Simulating a button press is the only way I could figure out how to make this work, and it is probably the easiest route anyways. The downside is that you must physically wire into the climate panel, which means soldering fine wires to its circuit board.
 
-The target vehicle is a 2022 Mazda CX-5 Turbo Signature with heated and ventilated seats and automatic climate control. Other vehicles may work if their buttons are simple switches, but you will have to work out the wiring
-yourself.
+The target vehicle is a 2022 Mazda CX-5 Turbo Signature with heated and ventilated seats and automatic climate control. Other vehicles may work if their buttons are simple switches, but you will have to work out the wiring yourself.
 
 ## How it works
 
@@ -225,6 +225,5 @@ are written up in [`docs/design-notes.md`](docs/design-notes.md).
 Issues and suggestions are welcome, especially wiring notes and test results for other
 vehicles. If you try this on another car, please record what you measured.
 
-## License
-
-No license has been chosen yet.
+## Build Log
+I will document my build process here. My goal is to take pictures of my progress, including what my prototypes look like, where I'm soldering to on the PCB, etc. The hardware comes in soon so I will begin building as soon as all the components come in.
