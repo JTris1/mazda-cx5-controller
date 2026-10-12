@@ -14,7 +14,7 @@ or with Mazda's Connected Services remote start subscription. But neither are re
 
 > [!NOTE]
 > **Status: early prototype.** The bench-test firmware is written and compiles, but it
-> has not yet been tested in a car. See [Build Log](#buildlog) for my latest physical build updates.
+> has not yet been tested in a car. See [Build Log](#build-log) for my latest physical build updates.
 > Cellular connectivity and the remote-start trigger are planned but not built. See [Roadmap](#roadmap).
 
 ## What it does
