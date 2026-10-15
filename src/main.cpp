@@ -10,8 +10,12 @@ constexpr int PIN_I2C_SCL = 9;
 
 // --- MCP23017 output channels (expander pin numbers 0-15) ------------------
 constexpr uint8_t MCP_ADDR = 0x27;
+
 constexpr uint8_t TEMP_UP_PIN = 0;
 constexpr uint8_t TEMP_DOWN_PIN = 1;
+constexpr uint8_t DRIVER_SEAT_HEATER_PIN = 2;
+constexpr uint8_t PASSENGER_SEAT_HEATER_PIN = 3;
+constexpr uint8_t DEFROST_PIN = 4;
 
 Adafruit_MCP23X17 mcp;
 
@@ -49,11 +53,12 @@ void Logf(LogTypes type, const char* fmt, ...) {
 constexpr uint32_t HOLD_MS_MAX = 500;  // fail-safe: an output is never held longer
 
 struct Settings {
-  uint32_t holdMs = 150;    // how long a button is "held"
-  uint32_t gapMs = 150;     // pause between presses
-  int tempMinF = 60;        // dial value when clamped at LO (unmeasured default)
-  int tempMaxF = 84;        // dial value when clamped at HI (unmeasured default)
-  int clampExtra = 2;       // extra down presses beyond the range, to be sure of LO
+  uint32_t holdMs = 150;      // how long a button is "held"
+  uint32_t gapMs = 150;       // pause between presses
+  int tempMinF = 60;          // dial value when clamped at LO (unmeasured default)
+  int tempMaxF = 84;          // dial value when clamped at HI (unmeasured default)
+  int clampExtra = 2;         // extra down presses beyond the range, to be sure of LO
+  int seatHeaterStages = 3;    // number of stages on the seat heater button (ex: 3 means the button can be pressed 3 times before looping around to 0)
 };
 Settings cfg;
 
@@ -68,6 +73,14 @@ void pressButton(uint8_t pin) {
 
 void pressButton(uint8_t pin, int times) {
   for (int i = 0; i < times; i++) pressButton(pin);
+}
+
+void pressButton(uint8_t pin, int times, void (*actionFunction)()) {
+  for (int i = 0; i < times; i++)
+  {
+    pressButton(pin);
+    actionFunction();
+  }
 }
 
 // --- Command handlers -----------------------------------------------------------
@@ -90,7 +103,7 @@ void cmdStatus(int argc, char** argv) {
 void cmdHold(int argc, char** argv) {
   long v;
   if (argc < 2 || !parseInt(argv[1], v) || v < 10 || v > (long)HOLD_MS_MAX) {
-    Logf(WARN, "usage: hold <10-%lu>", (unsigned long)HOLD_MS_MAX);
+    Logf(WARN, "Usage: hold <10-%lu>", (unsigned long)HOLD_MS_MAX);
     return;
   }
   cfg.holdMs = v;
@@ -100,7 +113,7 @@ void cmdHold(int argc, char** argv) {
 void cmdGap(int argc, char** argv) {
   long v;
   if (argc < 2 || !parseInt(argv[1], v) || v < 0 || v > 5000) {
-    Log(WARN, "usage: gap <0-5000>");
+    Log(WARN, "Usage: gap <0-5000>");
     return;
   }
   cfg.gapMs = v;
@@ -110,7 +123,7 @@ void cmdGap(int argc, char** argv) {
 void cmdRange(int argc, char** argv) {
   long lo, hi;
   if (argc < 3 || !parseInt(argv[1], lo) || !parseInt(argv[2], hi) || lo >= hi) {
-    Log(WARN, "usage: range <min> <max>   (min must be below max)");
+    Log(WARN, "Usage: range <min> <max>   (min must be below max)");
     return;
   }
   cfg.tempMinF = lo;
@@ -121,7 +134,7 @@ void cmdRange(int argc, char** argv) {
 void cmdClamp(int argc, char** argv) {
   long v;
   if (argc < 2 || !parseInt(argv[1], v) || v < 0 || v > 10) {
-    Log(WARN, "usage: clamp <0-10>");
+    Log(WARN, "Usage: clamp <0-10>");
     return;
   }
   cfg.clampExtra = v;
@@ -136,7 +149,7 @@ void pressCommand(const char* name, uint8_t pin, int argc, char** argv) {
   }
   long n = 1;
   if (argc >= 2 && (!parseInt(argv[1], n) || n < 1 || n > 50)) {
-    Logf(WARN, "usage: %s [1-50]", name);
+    Logf(WARN, "Usage: %s [1-50]", name);
     return;
   }
   Logf(INFO, "%s x%ld", name, n);
@@ -154,47 +167,91 @@ void cmdTemp(int argc, char** argv) {
   }
   long target;
   if (argc < 2 || !parseInt(argv[1], target) || target < cfg.tempMinF || target > cfg.tempMaxF) {
-    Logf(WARN, "usage: temp <%d-%d>", cfg.tempMinF, cfg.tempMaxF);
+    Logf(WARN, "Usage: temp <%d-%d>", cfg.tempMinF, cfg.tempMaxF);
     return;
   }
   int downs = (cfg.tempMaxF - cfg.tempMinF) + cfg.clampExtra;
   int ups = target - cfg.tempMinF;
-  Logf(INFO, "temp %ld F: %d down, then %d up", target, downs, ups);
+  Logf(INFO, "Temp %ld F: %d down, then %d up", target, downs, ups);
   pressButton(TEMP_DOWN_PIN, downs);
   pressButton(TEMP_UP_PIN, ups);
-  Log(INFO, "temp done");
+  Logf(INFO, "Temp set to %d", target);
+}
+
+
+// Seat heater state is tracked in software: the car gives no feedback, so we count
+// presses. One cycle is stages+1 presses (off, 1, 2, ... stages, back to off).
+int driverHeaterStage = 0;
+int passengerHeaterStage = 0;
+
+// Press the button as many times as needed to land on targetStage
+// (0 = off, cfg.seatHeaterStages = highest).
+void setSeatHeater(uint8_t pin, int& stage, int targetStage) {
+  int cycle = cfg.seatHeaterStages + 1;
+  int presses = (targetStage - stage + cycle) % cycle;
+  Logf(INFO, "Seat heater: stage %d -> %d (%d presses)", stage, targetStage, presses);
+  pressButton(pin, presses);
+  stage = targetStage;
+}
+
+// heater <driver|passenger> <on|off>
+void cmdHeater(int argc, char** argv) {
+  if (!expanderOk) {
+    Log(ERROR, "Expander is missing. Refused");
+    return;
+  }
+  bool driver = (argc >= 3 && strcasecmp(argv[1], "driver") == 0);
+  bool passenger = (argc >= 3 && strcasecmp(argv[1], "passenger") == 0);
+  bool on = (argc >= 3 && strcasecmp(argv[2], "on") == 0);
+  bool off = (argc >= 3 && strcasecmp(argv[2], "off") == 0);
+  if (!(driver || passenger) || !(on || off)) {
+    Log(WARN, "Usage: heater <driver|passenger> <on|off>");
+    return;
+  }
+
+  int target = on ? cfg.seatHeaterStages : 0;
+  if (driver) {
+    setSeatHeater(DRIVER_SEAT_HEATER_PIN, driverHeaterStage, target);
+  } else {
+    setSeatHeater(PASSENGER_SEAT_HEATER_PIN, passengerHeaterStage, target);
+  }
 }
 
 // --- Command table ---------------------------------------------------------------
 // Add a row here and it shows up in "help" and at boot automatically.
 struct Command {
   const char* name;
-  const char* usage;
+  const char* Usage;
   const char* help;
   void (*handler)(int argc, char** argv);
 };
 
 const Command commands[] = {
-  {"help",   "help",             "list all commands",                            printHelp},
-  {"status", "status",           "show expander state and current settings",     cmdStatus},
-  {"hold",   "hold <ms>",        "set button hold time (10-500 ms)",             cmdHold},
-  {"gap",    "gap <ms>",         "set pause between presses (0-5000 ms)",        cmdGap},
-  {"range",  "range <min> <max>", "set the dial's LO/HI temperature in F",       cmdRange},
-  {"clamp",  "clamp <n>",        "extra down presses used to reach LO (0-10)",   cmdClamp},
-  {"up",     "up [n]",           "press temp up n times (default 1)",            cmdUp},
-  {"down",   "down [n]",         "press temp down n times (default 1)",          cmdDown},
-  {"temp",   "temp <F>",         "set absolute temperature (clamp LO, count up)", cmdTemp},
+  {"help",   "help",                          "list all commands",                            printHelp},
+  {"status", "status",                        "show expander state and current settings",     cmdStatus},
+  {"hold",   "hold <ms>",                     "set button hold time (10-500 ms)",             cmdHold},
+  {"gap",    "gap <ms>",                      "set pause between presses (0-5000 ms)",        cmdGap},
+  {"range",  "range <min> <max>",             "set the dial's LO/HI temperature in F",       cmdRange},
+  {"clamp",  "clamp <n>",                     "extra down presses used to reach LO (0-10)",   cmdClamp},
+  {"up",     "up [n]",                        "press temp up n times (default 1)",            cmdUp},
+  {"down",   "down [n]",                      "press temp down n times (default 1)",          cmdDown},
+  {"temp",   "temp <F>",                      "set absolute temperature (clamp LO, count up)", cmdTemp},
+  {"heater", "heater <seat> <on|off>", "seat heater: driver or passenger, on or off", cmdHeater},
 };
 constexpr size_t COMMAND_COUNT = sizeof(commands) / sizeof(commands[0]);
 
 void printHelp(int argc, char** argv) {
   Serial.println("--- Commands ---");
   for (size_t i = 0; i < COMMAND_COUNT; i++) {
-    Serial.printf("  %-20s %s\n", commands[i].usage, commands[i].help);
+    Serial.printf("  %-20s %s\n", commands[i].Usage, commands[i].help);
   }
 }
 
 // --- Serial line reader ------------------------------------------------------------
+void printPrompt() {
+  Serial.print("> ");
+}
+
 void runLine(char* line) {
   char* argv[4];
   int argc = 0;
@@ -209,19 +266,26 @@ void runLine(char* line) {
       return;
     }
   }
-  Logf(WARN, "unknown command '%s' (type help)", argv[0]);
+  Logf(WARN, "Unknown command '%s' (type help)", argv[0]);
 }
 
 void pollSerial() {
   static char line[64];
   static size_t len = 0;
+  static char prev = 0;  // previous byte, to treat "\r\n" as a single Enter
   while (Serial.available()) {
     char c = Serial.read();
+    bool secondOfCrLf = (c == '\n' && prev == '\r');
+    prev = c;
+    if (secondOfCrLf) {
+      continue;
+    }
     if (c == '\r' || c == '\n') {
       Serial.println();  // echo the Enter key
       line[len] = '\0';
       len = 0;
       runLine(line);
+      printPrompt();  // ready for the next command
     } else if (c == '\b' || c == 0x7F) {
       if (len > 0) {
         len--;
@@ -257,6 +321,7 @@ void setup() {
   }
 
   printHelp(0, nullptr);
+  printPrompt();
 }
 
 void loop() {
