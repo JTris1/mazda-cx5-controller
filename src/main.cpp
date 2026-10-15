@@ -8,6 +8,17 @@
 constexpr int PIN_I2C_SDA = 8;
 constexpr int PIN_I2C_SCL = 9;
 
+// Remote-start trigger: drives a PC817 that pulls the iDatastart trigger wire to
+// ground. Native GPIO on purpose, not the expander, so it stays independent of I2C.
+// TODO: confirm this pin is free and broken out on your board.
+constexpr int RS_TRIGGER_PIN = 14;
+
+// Engine-running input: the iDatastart GWR output (M2-06 BLUE/WHITE) grounds this wire
+// while the engine runs and leaves it floating otherwise, so we use the internal
+// pull-up and read LOW as "running". Add a ~1k series resistor in the wiring.
+// TODO: confirm this pin is free and broken out on your board.
+constexpr int ENGINE_RUNNING_PIN = 21;
+
 // --- MCP23017 output channels (expander pin numbers 0-15) ------------------
 constexpr uint8_t MCP_ADDR = 0x27;
 
@@ -21,6 +32,12 @@ constexpr uint8_t REAR_DEFROST_PIN = 5;
 Adafruit_MCP23X17 mcp;
 
 bool expanderOk = false;
+
+// Engine state (updated by pollEngine, see "Engine running status")
+bool engineRunning = false;
+bool engineCandidate = false;       // most recent raw reading
+uint32_t engineCandidateSince = 0;  // when the raw reading last changed
+uint32_t engineChangedAt = 0;       // when engineRunning last changed
 
 enum LogTypes {INFO, DEBUG, WARN, ERROR};
 void Log(LogTypes type, const char* message) {
@@ -52,6 +69,7 @@ void Logf(LogTypes type, const char* fmt, ...) {
 
 // --- Runtime settings (changeable from the serial console) ------------------
 constexpr uint32_t HOLD_MS_MAX = 500;  // fail-safe: an output is never held longer
+constexpr uint32_t RS_PULSE_MS_MAX = 2000;
 
 struct Settings {
   uint32_t holdMs = 150;      // how long a button is "held"
@@ -59,6 +77,10 @@ struct Settings {
   int tempMinF = 60;          // dial value when clamped at LO (unmeasured default)
   int tempMaxF = 84;          // dial value when clamped at HI (unmeasured default)
   int clampExtra = 2;         // extra down presses beyond the range, to be sure of LO
+  uint32_t rsPulseMs = 300;   // remote-start trigger pulse width (module spec unknown, tune it)
+  uint32_t rsGapMs = 300;     // gap between pulses when sending more than one
+  int rsPulses = 2;           // 2 = the module's "double pulse" setting (1-3)
+  uint32_t rsConfirmMs = 20000;  // how long to wait for the engine to report running
   int seatHeaterStages = 3;    // number of stages on the seat heater button (ex: 3 means the button can be pressed 3 times before looping around to 0)
 };
 Settings cfg;
@@ -99,6 +121,9 @@ void cmdStatus(int argc, char** argv) {
   Logf(INFO, "expander: %s", expanderOk ? "ok" : "MISSING");
   Logf(INFO, "hold=%lu ms  gap=%lu ms", (unsigned long)cfg.holdMs, (unsigned long)cfg.gapMs);
   Logf(INFO, "temp range=%d-%d F  clampExtra=%d", cfg.tempMinF, cfg.tempMaxF, cfg.clampExtra);
+  Logf(INFO, "engine: %s", engineRunning ? "running" : "stopped");
+  Logf(INFO, "remote start: %d pulse(s), %lu ms on, %lu ms gap", cfg.rsPulses,
+       (unsigned long)cfg.rsPulseMs, (unsigned long)cfg.rsGapMs);
 }
 
 void cmdHold(int argc, char** argv) {
@@ -259,6 +284,104 @@ void cmdDefrost(int argc, char** argv) {
   }
 }
 
+// --- Remote start trigger ---------------------------------------------------------
+// HIGH turns the optocoupler on, which pulls the module's trigger wire to ground.
+void pollEngine();  // defined in "Engine running status" below
+
+// Returns true only once the engine input confirms the engine is running.
+bool sendRemoteStart() {
+  // The module may treat another pulse as a stop request, so never pulse a running engine.
+  if (engineRunning) {
+    Log(WARN, "Engine is already running, not sending a start pulse");
+    return true;
+  }
+
+  Logf(INFO, "Remote start: %d pulse(s), %lu ms on, %lu ms gap", cfg.rsPulses,
+       (unsigned long)cfg.rsPulseMs, (unsigned long)cfg.rsGapMs);
+  for (int i = 0; i < cfg.rsPulses; i++) {
+    digitalWrite(RS_TRIGGER_PIN, HIGH);
+    delay(cfg.rsPulseMs);
+    digitalWrite(RS_TRIGGER_PIN, LOW);
+    if (i < cfg.rsPulses - 1) delay(cfg.rsGapMs);
+  }
+  Logf(INFO, "Trigger sent, waiting up to %lu s for the engine...",
+       (unsigned long)(cfg.rsConfirmMs / 1000));
+
+  // Wait for the debounced engine input to go true, or give up.
+  uint32_t startedAt = millis();
+  while (millis() - startedAt < cfg.rsConfirmMs) {
+    pollEngine();
+    if (engineRunning) {
+      Logf(INFO, "Remote start CONFIRMED after %lu ms", (unsigned long)(millis() - startedAt));
+      return true;
+    }
+    delay(10);
+  }
+  Logf(ERROR, "Remote start NOT confirmed within %lu s. Check the module's parking-light error code.",
+       (unsigned long)(cfg.rsConfirmMs / 1000));
+  return false;
+}
+
+void cmdStart(int argc, char** argv) {
+  sendRemoteStart();
+}
+
+// rswait <seconds>
+void cmdRsWait(int argc, char** argv) {
+  long v;
+  if (argc < 2 || !parseInt(argv[1], v) || v < 1 || v > 120) {
+    Log(WARN, "Usage: rswait <1-120 seconds>");
+    return;
+  }
+  cfg.rsConfirmMs = (uint32_t)v * 1000;
+  Logf(INFO, "Remote start confirm wait = %ld s", v);
+}
+
+// rscfg <pulseMs> <gapMs> <pulses>
+void cmdRsCfg(int argc, char** argv) {
+  long pulse, gap, count;
+  if (argc < 4 || !parseInt(argv[1], pulse) || !parseInt(argv[2], gap) || !parseInt(argv[3], count) ||
+      pulse < 20 || pulse > (long)RS_PULSE_MS_MAX || gap < 0 || gap > 5000 || count < 1 || count > 3) {
+    Logf(WARN, "Usage: rscfg <pulse 20-%lu> <gap 0-5000> <pulses 1-3>", (unsigned long)RS_PULSE_MS_MAX);
+    return;
+  }
+  cfg.rsPulseMs = pulse;
+  cfg.rsGapMs = gap;
+  cfg.rsPulses = count;
+  Logf(INFO, "Remote start: %ld pulse(s), %ld ms on, %ld ms gap", count, pulse, gap);
+}
+
+// --- Engine running status ----------------------------------------------------------
+constexpr uint32_t ENGINE_DEBOUNCE_MS = 200;  // reading must be stable this long to count
+
+
+// GWR pulls the wire to ground while running, so LOW means running.
+bool readEngineRaw() {
+  return digitalRead(ENGINE_RUNNING_PIN) == LOW;
+}
+
+// Call every loop. Debounces the input and logs each change.
+void pollEngine() {
+  bool raw = readEngineRaw();
+  uint32_t now = millis();
+  if (raw != engineCandidate) {
+    engineCandidate = raw;
+    engineCandidateSince = now;
+  }
+  if (engineCandidate != engineRunning && now - engineCandidateSince >= ENGINE_DEBOUNCE_MS) {
+    engineRunning = engineCandidate;
+    engineChangedAt = now;
+    Log(INFO, engineRunning ? "Engine running" : "Engine stopped");
+  }
+}
+
+void cmdEngine(int argc, char** argv) {
+  Logf(INFO, "Engine %s (%lu s since last change, raw pin %s)",
+       engineRunning ? "RUNNING" : "stopped",
+       (unsigned long)((millis() - engineChangedAt) / 1000),
+       digitalRead(ENGINE_RUNNING_PIN) == LOW ? "LOW" : "HIGH");
+}
+
 // --- Command table ---------------------------------------------------------------
 // Add a row here and it shows up in "help" and at boot automatically.
 struct Command {
@@ -280,6 +403,10 @@ const Command commands[] = {
   {"temp",   "temp <F>",                      "set absolute temperature (clamp LO, count up)", cmdTemp},
   {"heater", "heater <seat> <on|off>", "seat heater: driver or passenger, on or off", cmdHeater},
   {"defrost", "defrost <front|rear> <on|off>", "defrost: front or rear, on or off", cmdDefrost},
+  {"rswait", "rswait <sec>",                  "set how long start waits to confirm the engine", cmdRsWait},
+  {"engine", "engine",                        "show engine running status (GWR input)",       cmdEngine},
+  {"start",  "start",                         "send the remote-start trigger pulse(s)",       cmdStart},
+  {"rscfg",  "rscfg <ms> <gap> <n>",          "set trigger pulse width, gap and pulse count", cmdRsCfg},
 };
 constexpr size_t COMMAND_COUNT = sizeof(commands) / sizeof(commands[0]);
 
@@ -342,6 +469,14 @@ void pollSerial() {
 }
 
 void setup() {
+  // Safe state first: the trigger output must be LOW before anything else runs.
+  pinMode(RS_TRIGGER_PIN, OUTPUT);
+  digitalWrite(RS_TRIGGER_PIN, LOW);
+
+  // Engine input: floats high via the pull-up, module grounds it while running.
+  pinMode(ENGINE_RUNNING_PIN, INPUT_PULLUP);
+  engineRunning = engineCandidate = readEngineRaw();
+
   Serial.begin(115200);
   delay(2000);  // give USB-CDC a moment so early prints are not lost
   Log(INFO, "Booting...");
@@ -354,7 +489,14 @@ void setup() {
 
   if (expanderOk) {
     // Outputs start LOW so no optocoupler is ever driven at boot.
-    for (uint8_t pin : {TEMP_UP_PIN, TEMP_DOWN_PIN}) {
+    for (uint8_t pin : {
+      TEMP_UP_PIN, 
+      TEMP_DOWN_PIN, 
+      DRIVER_SEAT_HEATER_PIN, 
+      PASSENGER_SEAT_HEATER_PIN, 
+      FRONT_DEFROST_PIN, 
+      REAR_DEFROST_PIN
+    }) {
       mcp.pinMode(pin, OUTPUT);
       mcp.digitalWrite(pin, LOW);
     }
@@ -368,5 +510,6 @@ void setup() {
 }
 
 void loop() {
+  pollEngine();
   pollSerial();
 }
