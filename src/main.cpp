@@ -15,7 +15,8 @@ constexpr uint8_t TEMP_UP_PIN = 0;
 constexpr uint8_t TEMP_DOWN_PIN = 1;
 constexpr uint8_t DRIVER_SEAT_HEATER_PIN = 2;
 constexpr uint8_t PASSENGER_SEAT_HEATER_PIN = 3;
-constexpr uint8_t DEFROST_PIN = 4;
+constexpr uint8_t FRONT_DEFROST_PIN = 4;
+constexpr uint8_t REAR_DEFROST_PIN = 5;
 
 Adafruit_MCP23X17 mcp;
 
@@ -217,6 +218,47 @@ void cmdHeater(int argc, char** argv) {
   }
 }
 
+
+// Defrost button control
+// Each defrost button toggles, and the car gives no feedback, so we track the state.
+bool frontDefrostOn = false;
+bool rearDefrostOn = false;
+
+// Press the button only if the tracked state differs from what was asked for.
+void setDefrost(const char* name, uint8_t pin, bool& state, bool wantOn) {
+  const char* word = wantOn ? "on" : "off";
+  if (state == wantOn) {
+    Logf(INFO, "%s defrost is already %s.", name, word);
+    return;
+  }
+  pressButton(pin);
+  state = wantOn;
+  Logf(INFO, "%s defrost turned %s", name, word);
+}
+
+// defrost <front|rear> <on|off>
+void cmdDefrost(int argc, char** argv) {
+  if (!expanderOk) {
+    Log(ERROR, "Expander is missing. Refused");
+    return;
+  }
+  bool front = (argc >= 3 && strcasecmp(argv[1], "front") == 0);
+  bool rear = (argc >= 3 && strcasecmp(argv[1], "rear") == 0);
+  bool on = (argc >= 3 && strcasecmp(argv[2], "on") == 0);
+  bool off = (argc >= 3 && strcasecmp(argv[2], "off") == 0);
+
+  if (!(front || rear) || !(on || off)) {
+    Log(WARN, "Usage: defrost <front|rear> <on|off>");
+    return;
+  }
+
+  if (front) {
+    setDefrost("Front", FRONT_DEFROST_PIN, frontDefrostOn, on);
+  } else {
+    setDefrost("Rear", REAR_DEFROST_PIN, rearDefrostOn, on);
+  }
+}
+
 // --- Command table ---------------------------------------------------------------
 // Add a row here and it shows up in "help" and at boot automatically.
 struct Command {
@@ -237,6 +279,7 @@ const Command commands[] = {
   {"down",   "down [n]",                      "press temp down n times (default 1)",          cmdDown},
   {"temp",   "temp <F>",                      "set absolute temperature (clamp LO, count up)", cmdTemp},
   {"heater", "heater <seat> <on|off>", "seat heater: driver or passenger, on or off", cmdHeater},
+  {"defrost", "defrost <front|rear> <on|off>", "defrost: front or rear, on or off", cmdDefrost},
 };
 constexpr size_t COMMAND_COUNT = sizeof(commands) / sizeof(commands[0]);
 
