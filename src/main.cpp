@@ -4,7 +4,6 @@
 #include <stdarg.h>
 
 // --- Pins (native ESP32-S3 GPIO) -------------------------------------------
-// TODO: confirm these against your board's header before wiring.
 constexpr int PIN_I2C_SDA = 8;
 constexpr int PIN_I2C_SCL = 9;
 
@@ -28,6 +27,9 @@ constexpr uint8_t DRIVER_SEAT_HEATER_PIN = 2;
 constexpr uint8_t PASSENGER_SEAT_HEATER_PIN = 3;
 constexpr uint8_t FRONT_DEFROST_PIN = 4;
 constexpr uint8_t REAR_DEFROST_PIN = 5;
+constexpr uint8_t FAN_UP_PIN = 6;        // GPA6
+constexpr uint8_t FAN_DOWN_PIN = 7;      // GPA7
+constexpr uint8_t CLIMATE_POWER_PIN = 8; // GPB0 (library pins 8-15 are bank B)
 
 Adafruit_MCP23X17 mcp;
 
@@ -117,15 +119,6 @@ bool parseInt(const char* text, long& out) {
 
 void printHelp(int argc, char** argv);  // defined after the command table
 
-void cmdStatus(int argc, char** argv) {
-  Logf(INFO, "expander: %s", expanderOk ? "ok" : "MISSING");
-  Logf(INFO, "hold=%lu ms  gap=%lu ms", (unsigned long)cfg.holdMs, (unsigned long)cfg.gapMs);
-  Logf(INFO, "temp range=%d-%d F  clampExtra=%d", cfg.tempMinF, cfg.tempMaxF, cfg.clampExtra);
-  Logf(INFO, "engine: %s", engineRunning ? "running" : "stopped");
-  Logf(INFO, "remote start: %d pulse(s), %lu ms on, %lu ms gap", cfg.rsPulses,
-       (unsigned long)cfg.rsPulseMs, (unsigned long)cfg.rsGapMs);
-}
-
 void cmdHold(int argc, char** argv) {
   long v;
   if (argc < 2 || !parseInt(argv[1], v) || v < 10 || v > (long)HOLD_MS_MAX) {
@@ -206,12 +199,13 @@ void cmdTemp(int argc, char** argv) {
 
 
 // Seat heater state is tracked in software: the car gives no feedback, so we count
-// presses. One cycle is stages+1 presses (off, 1, 2, ... stages, back to off).
+// presses since "off". Each press steps down one level and the cycle is stages+1 presses:
+//   press 1 = high, press 2 = medium, press 3 = low, press 4 = off (back to the start).
+// So the stage number is both the press count and the level: 0 off, 1 high, 2 medium, 3 low.
 int driverHeaterStage = 0;
 int passengerHeaterStage = 0;
 
-// Press the button as many times as needed to land on targetStage
-// (0 = off, cfg.seatHeaterStages = highest).
+// Press the button as many times as needed to land on targetStage.
 void setSeatHeater(uint8_t pin, int& stage, int targetStage) {
   int cycle = cfg.seatHeaterStages + 1;
   int presses = (targetStage - stage + cycle) % cycle;
@@ -220,7 +214,7 @@ void setSeatHeater(uint8_t pin, int& stage, int targetStage) {
   stage = targetStage;
 }
 
-// heater <driver|passenger> <on|off>
+// heater <driver|passenger> <high|medium|low|off>   ("on" is the same as "high")
 void cmdHeater(int argc, char** argv) {
   if (!expanderOk) {
     Log(ERROR, "Expander is missing. Refused");
@@ -228,21 +222,25 @@ void cmdHeater(int argc, char** argv) {
   }
   bool driver = (argc >= 3 && strcasecmp(argv[1], "driver") == 0);
   bool passenger = (argc >= 3 && strcasecmp(argv[1], "passenger") == 0);
-  bool on = (argc >= 3 && strcasecmp(argv[2], "on") == 0);
-  bool off = (argc >= 3 && strcasecmp(argv[2], "off") == 0);
-  if (!(driver || passenger) || !(on || off)) {
-    Log(WARN, "Usage: heater <driver|passenger> <on|off>");
+
+  int target = -1;
+  if (argc >= 3) {
+    if (strcasecmp(argv[2], "off") == 0) target = 0;
+    else if (strcasecmp(argv[2], "high") == 0 || strcasecmp(argv[2], "on") == 0) target = 1;
+    else if (strcasecmp(argv[2], "medium") == 0) target = 2;
+    else if (strcasecmp(argv[2], "low") == 0) target = 3;
+  }
+  if (!(driver || passenger) || target < 0 || target > cfg.seatHeaterStages) {
+    Log(WARN, "Usage: heater <driver|passenger> <high|medium|low|off>");
     return;
   }
 
-  int target = on ? cfg.seatHeaterStages : 0;
   if (driver) {
     setSeatHeater(DRIVER_SEAT_HEATER_PIN, driverHeaterStage, target);
   } else {
     setSeatHeater(PASSENGER_SEAT_HEATER_PIN, passengerHeaterStage, target);
   }
 }
-
 
 // Defrost button control
 // Each defrost button toggles, and the car gives no feedback, so we track the state.
@@ -282,6 +280,29 @@ void cmdDefrost(int argc, char** argv) {
   } else {
     setDefrost("Rear", REAR_DEFROST_PIN, rearDefrostOn, on);
   }
+}
+
+// Fan speed: plain up/down buttons, same idea as the temperature dial.
+// fan <up|down> [n]
+void cmdFan(int argc, char** argv) {
+  if (argc < 2 || (strcasecmp(argv[1], "up") != 0 && strcasecmp(argv[1], "down") != 0)) {
+    Log(WARN, "Usage: fan <up|down> [1-50]");
+    return;
+  }
+  bool up = (strcasecmp(argv[1], "up") == 0);
+  // pressCommand expects the optional count as argv[1], so pass the shifted arguments.
+  pressCommand(up ? "fan up" : "fan down", up ? FAN_UP_PIN : FAN_DOWN_PIN, argc - 1, argv + 1);
+}
+
+// Climate power button: a momentary switch, one press toggles the climate system.
+// No state is tracked here; once CAN/LIN feedback exists the real state can be read.
+void cmdPower(int argc, char** argv) {
+  if (!expanderOk) {
+    Log(ERROR, "Expander is missing. Refused");
+    return;
+  }
+  Log(INFO, "Climate power button pressed");
+  pressButton(CLIMATE_POWER_PIN);
 }
 
 // --- Remote start trigger ---------------------------------------------------------
@@ -382,6 +403,64 @@ void cmdEngine(int argc, char** argv) {
        digitalRead(ENGINE_RUNNING_PIN) == LOW ? "LOW" : "HIGH");
 }
 
+// --- Bench test ------------------------------------------------------------------
+// Holds ONE expander output ON for several seconds so it can be measured with a
+// multimeter. This deliberately exceeds the normal 500 ms hold cap, so it is limited
+// to BENCH_MAX_S, any keypress aborts it, and the pin is always driven LOW afterwards.
+// The remote-start trigger is intentionally not included.
+constexpr uint32_t BENCH_MAX_S = 30;
+
+struct BenchOutput {
+  const char* name;
+  uint8_t pin;
+};
+
+const BenchOutput benchOutputs[] = {
+  {"up", TEMP_UP_PIN},
+  {"down", TEMP_DOWN_PIN},
+  {"driver", DRIVER_SEAT_HEATER_PIN},
+  {"passenger", PASSENGER_SEAT_HEATER_PIN},
+  {"front", FRONT_DEFROST_PIN},
+  {"rear", REAR_DEFROST_PIN},
+  {"fanup", FAN_UP_PIN},
+  {"fandown", FAN_DOWN_PIN},
+  {"power", CLIMATE_POWER_PIN},
+};
+
+// bench <up|down|driver|passenger|front|rear> <seconds>
+void cmdBench(int argc, char** argv) {
+  if (!expanderOk) {
+    Log(ERROR, "Expander is missing. Refused");
+    return;
+  }
+  const BenchOutput* out = nullptr;
+  long seconds;
+  if (argc >= 3) {
+    for (const BenchOutput& o : benchOutputs) {
+      if (strcasecmp(argv[1], o.name) == 0) out = &o;
+    }
+  }
+  if (!out || !parseInt(argv[2], seconds) || seconds < 1 || seconds > (long)BENCH_MAX_S) {
+    Logf(WARN, "Usage: bench <up|down|driver|passenger|front|rear|fanup|fandown|power> <1-%lu s>", (unsigned long)BENCH_MAX_S);
+    return;
+  }
+
+  Logf(INFO, "Bench: %s ON for %ld s. Measure now. Press any key to stop early.", out->name, seconds);
+  // Throw away leftover input first (the "\n" of the Enter that started this command),
+  // otherwise it would count as the "any key" that stops the test immediately.
+  delay(50);
+  while (Serial.available()) Serial.read();
+
+  mcp.digitalWrite(out->pin, HIGH);
+  uint32_t end = millis() + (uint32_t)seconds * 1000;
+  while (millis() < end && !Serial.available()) {
+    delay(10);
+  }
+  mcp.digitalWrite(out->pin, LOW);
+  while (Serial.available()) Serial.read();  // discard the key that stopped it
+  Log(INFO, "Bench: output OFF");
+}
+
 // --- Command table ---------------------------------------------------------------
 // Add a row here and it shows up in "help" and at boot automatically.
 struct Command {
@@ -393,7 +472,6 @@ struct Command {
 
 const Command commands[] = {
   {"help",   "help",                          "list all commands",                            printHelp},
-  {"status", "status",                        "show expander state and current settings",     cmdStatus},
   {"hold",   "hold <ms>",                     "set button hold time (10-500 ms)",             cmdHold},
   {"gap",    "gap <ms>",                      "set pause between presses (0-5000 ms)",        cmdGap},
   {"range",  "range <min> <max>",             "set the dial's LO/HI temperature in F",       cmdRange},
@@ -401,9 +479,12 @@ const Command commands[] = {
   {"up",     "up [n]",                        "press temp up n times (default 1)",            cmdUp},
   {"down",   "down [n]",                      "press temp down n times (default 1)",          cmdDown},
   {"temp",   "temp <F>",                      "set absolute temperature (clamp LO, count up)", cmdTemp},
-  {"heater", "heater <seat> <on|off>", "seat heater: driver or passenger, on or off", cmdHeater},
+  {"heater", "heater <seat> <level>", "seat heater: driver|passenger, high|medium|low|off", cmdHeater},
   {"defrost", "defrost <front|rear> <on|off>", "defrost: front or rear, on or off", cmdDefrost},
+  {"fan",    "fan <up|down> [n]",             "press fan speed up or down n times",           cmdFan},
+  {"power",  "power",                         "press the climate power button once (toggles)", cmdPower},
   {"rswait", "rswait <sec>",                  "set how long start waits to confirm the engine", cmdRsWait},
+  {"bench",  "bench <name> <sec>",            "hold one output ON for metering (1-30 s)",     cmdBench},
   {"engine", "engine",                        "show engine running status (GWR input)",       cmdEngine},
   {"start",  "start",                         "send the remote-start trigger pulse(s)",       cmdStart},
   {"rscfg",  "rscfg <ms> <gap> <n>",          "set trigger pulse width, gap and pulse count", cmdRsCfg},
@@ -495,7 +576,10 @@ void setup() {
       DRIVER_SEAT_HEATER_PIN, 
       PASSENGER_SEAT_HEATER_PIN, 
       FRONT_DEFROST_PIN, 
-      REAR_DEFROST_PIN
+      REAR_DEFROST_PIN,
+      FAN_UP_PIN,
+      FAN_DOWN_PIN,
+      CLIMATE_POWER_PIN
     }) {
       mcp.pinMode(pin, OUTPUT);
       mcp.digitalWrite(pin, LOW);
