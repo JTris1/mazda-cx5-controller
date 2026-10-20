@@ -2,7 +2,7 @@
 #include "config.h"
 #include "log.h"
 
-bool engineRunning = false;
+volatile bool engineRunning = false;
 static bool engineCandidate = false;       // most recent raw reading
 static uint32_t engineCandidateSince = 0;  // when the raw reading last changed
 uint32_t engineChangedAt = 0;
@@ -30,4 +30,15 @@ void pollEngine() {
     engineChangedAt = now;
     Log(INFO, engineRunning ? "Engine running" : "Engine stopped");
   }
+}
+
+static void engineTask(void*) {
+  for (;;) {
+    pollEngine();
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+}
+
+void engineStartTask() {
+  xTaskCreatePinnedToCore(engineTask, "engine", 3072, nullptr, 1, nullptr, 0);
 }

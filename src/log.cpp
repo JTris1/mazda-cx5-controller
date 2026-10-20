@@ -1,8 +1,17 @@
 #include <Arduino.h>
 #include <stdarg.h>
 #include "log.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+static SemaphoreHandle_t logMutex = nullptr;
+
+void logBegin() {
+  if (!logMutex) logMutex = xSemaphoreCreateMutex();
+}
 
 void Log(LogTypes type, const char* message) {
+  if (logMutex) xSemaphoreTake(logMutex, portMAX_DELAY);
   switch (type) {
     case INFO:
       Serial.printf("INFO  | %s\n", message);
@@ -17,6 +26,7 @@ void Log(LogTypes type, const char* message) {
       Serial.printf("ERROR | %s\n", message);
       break;
   }
+  if (logMutex) xSemaphoreGive(logMutex);
 }
 
 void Logf(LogTypes type, const char* fmt, ...) {

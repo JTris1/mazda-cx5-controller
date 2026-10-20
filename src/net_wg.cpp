@@ -1,3 +1,4 @@
+#include <WiFi.h>
 #include <WireGuard-ESP32.h>
 #include "net_wg.h"
 #include "log.h"
@@ -18,6 +19,14 @@ bool wgStarted() {
   return started;
 }
 
+void wgRestart() {
+  if (started) {
+    wg.end();
+    started = false;
+  }
+  Log(INFO, "WireGuard: restarting");
+}
+
 void wgPoll() {
   if (!WG_ENABLED) return;
 
@@ -31,6 +40,15 @@ void wgPoll() {
 
   if (!started && wifiConnected() && timeSynced()) {
     Logf(INFO, "WireGuard: starting tunnel to %s:%u (may take a few seconds)", WG_ENDPOINT, WG_PORT);
+    // Show what the endpoint name resolves to from this network (the library resolves it itself).
+    IPAddress endpointIp;
+    if (WiFi.hostByName(WG_ENDPOINT, endpointIp)) {
+      Logf(INFO, "WireGuard: %s resolves to %s", WG_ENDPOINT, endpointIp.toString().c_str());
+    } else {
+      Logf(ERROR, "WireGuard: cannot resolve %s from this network", WG_ENDPOINT);
+      delay(5000);
+      return;
+    }
     IPAddress localIp;
     if (!localIp.fromString(WG_LOCAL_IP)) {
       Logf(ERROR, "WireGuard: bad WG_LOCAL_IP '%s'", WG_LOCAL_IP);

@@ -8,5 +8,8 @@ void wgPoll();
 
 bool wgStarted();
 
+// Stops the tunnel; wgPoll() starts it again on its next pass (handy while debugging).
+void wgRestart();
+
 // One-shot report used by the "wg" console command.
 void wgPrintStatus();

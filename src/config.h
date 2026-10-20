@@ -35,6 +35,8 @@ constexpr uint32_t HOLD_MS_MAX = 500;  // fail-safe: an output is never held lon
 constexpr uint32_t RS_PULSE_MS_MAX = 2000;
 constexpr uint32_t ENGINE_DEBOUNCE_MS = 200;  // engine input must be stable this long to count
 constexpr uint32_t BENCH_MAX_S = 30;
+constexpr int STEPS_MAX = 50;       // temperature button repeat limit
+constexpr int FAN_STEPS_MAX = 50;   // TODO: the car has only 6 or 7 fan speeds; set the real number
 
 // --- Runtime settings (changeable from the serial console) ------------------
 struct Settings {

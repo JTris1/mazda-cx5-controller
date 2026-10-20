@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include "actions.h"
 #include "console.h"
 #include "engine.h"
 #include "log.h"
@@ -13,15 +14,17 @@ void setup() {
 
   Serial.begin(115200);
   delay(2000);  // give USB-CDC a moment so early prints are not lost
+  logBegin();  // from here on Log() is safe to call from several tasks
   Log(INFO, "Booting...");
 
   outputsBegin();
+  actionsBegin();
+  engineStartTask();
   wifiBegin();
   consoleBegin();
 }
 
 void loop() {
-  pollEngine();
   wifiPoll();
   wgPoll();
   consolePoll();

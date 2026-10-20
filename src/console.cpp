@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "console.h"
+#include "actions.h"
 #include "climate.h"
 #include "config.h"
 #include "engine.h"
@@ -17,6 +18,17 @@ static bool requireExpander() {
     return false;
   }
   return true;
+}
+
+// Waits for a queued action to finish. The worker task prints the details, so the console
+// stays synchronous: the prompt only comes back once the buttons have been pressed.
+static void finish(Submit result, uint32_t id) {
+  if (result != Submit::Ok) {
+    Logf(result == Submit::NoExpander ? ERROR : WARN, "%s", submitText(result));
+    return;
+  }
+  JobInfo info;
+  if (!actionsWait(id, 120000, info)) Log(ERROR, "Timed out waiting for the action");
 }
 
 // Optional repeat count in argv[1] (default 1, range 1-50). Prints the usage line on error.
@@ -78,13 +90,15 @@ static void cmdClamp(int argc, char** argv) {
 static void cmdUp(int argc, char** argv) {
   int n;
   if (!requireExpander() || !parseCount("up", argc, argv, n)) return;
-  climateTempStep(true, n);
+  uint32_t id;
+  finish(actionTempStep(true, n, &id), id);
 }
 
 static void cmdDown(int argc, char** argv) {
   int n;
   if (!requireExpander() || !parseCount("down", argc, argv, n)) return;
-  climateTempStep(false, n);
+  uint32_t id;
+  finish(actionTempStep(false, n, &id), id);
 }
 
 static void cmdTemp(int argc, char** argv) {
@@ -94,7 +108,8 @@ static void cmdTemp(int argc, char** argv) {
     Logf(WARN, "Usage: temp <%d-%d>", cfg.tempMinF, cfg.tempMaxF);
     return;
   }
-  climateSetTemperature((int)target);
+  uint32_t id;
+  finish(actionSetTemperature((int)target, &id), id);
 }
 
 // heater <driver|passenger> <high|medium|low|off>   ("on" is the same as "high")
@@ -114,7 +129,8 @@ static void cmdHeater(int argc, char** argv) {
     Log(WARN, "Usage: heater <driver|passenger> <high|medium|low|off>");
     return;
   }
-  climateSetHeater(driver ? SEAT_DRIVER : SEAT_PASSENGER, target);
+  uint32_t id;
+  finish(actionSetHeater(driver ? SEAT_DRIVER : SEAT_PASSENGER, target, &id), id);
 }
 
 // defrost <front|rear> <on|off>
@@ -129,7 +145,8 @@ static void cmdDefrost(int argc, char** argv) {
     Log(WARN, "Usage: defrost <front|rear> <on|off>");
     return;
   }
-  climateSetDefrost(front ? DEFROST_FRONT : DEFROST_REAR, on);
+  uint32_t id;
+  finish(actionSetDefrost(front ? DEFROST_FRONT : DEFROST_REAR, on, &id), id);
 }
 
 // fan <up|down> [n]
@@ -142,17 +159,20 @@ static void cmdFan(int argc, char** argv) {
   int n;
   // parseCount reads the optional count from argv[1], so pass the shifted arguments.
   if (!requireExpander() || !parseCount(up ? "fan up" : "fan down", argc - 1, argv + 1, n)) return;
-  climateFanStep(up, n);
+  uint32_t id;
+  finish(actionFanStep(up, n, &id), id);
 }
 
 static void cmdPower(int argc, char** argv) {
   if (!requireExpander()) return;
-  climatePowerPress();
+  uint32_t id;
+  finish(actionPower(&id), id);
 }
 
 // --- Remote start commands ----------------------------------------------------------
 static void cmdStart(int argc, char** argv) {
-  sendRemoteStart();
+  uint32_t id;
+  finish(actionRemoteStart(&id), id);
 }
 
 // rswait <seconds>
@@ -191,7 +211,13 @@ static void cmdNet(int argc, char** argv) {
   wifiPrintStatus();
 }
 
+// wg           show tunnel status
+// wg restart   stop the tunnel and let it start again (a new handshake attempt)
 static void cmdWg(int argc, char** argv) {
+  if (argc >= 2 && strcasecmp(argv[1], "restart") == 0) {
+    wgRestart();
+    return;
+  }
   wgPrintStatus();
 }
 
@@ -238,12 +264,18 @@ static void cmdBench(int argc, char** argv) {
   delay(50);
   while (Serial.available()) Serial.read();
 
+  // Take exclusive access so no queued action can press buttons during the measurement.
+  if (!actionsLock(2000)) {
+    Log(WARN, "Busy: an action is still running, try again");
+    return;
+  }
   mcp.digitalWrite(out->pin, HIGH);
   uint32_t end = millis() + (uint32_t)seconds * 1000;
   while (millis() < end && !Serial.available()) {
     delay(10);
   }
   mcp.digitalWrite(out->pin, LOW);
+  actionsUnlock();
   while (Serial.available()) Serial.read();  // discard the key that stopped it
   Log(INFO, "Bench: output OFF");
 }
@@ -273,7 +305,7 @@ static const Command commands[] = {
   {"rswait", "rswait <sec>",                  "set how long start waits to confirm the engine", cmdRsWait},
   {"bench",  "bench <name> <sec>",            "hold one output ON for metering (1-30 s)",     cmdBench},
   {"net",    "net",                           "show Wi-Fi connection and clock status",       cmdNet},
-  {"wg",     "wg",                            "show WireGuard tunnel status",                 cmdWg},
+  {"wg",     "wg [restart]",                  "show WireGuard tunnel status, or restart it",                 cmdWg},
   {"engine", "engine",                        "show engine running status (GWR input)",       cmdEngine},
   {"start",  "start",                         "send the remote-start trigger pulse(s)",       cmdStart},
   {"rscfg",  "rscfg <ms> <gap> <n>",          "set trigger pulse width, gap and pulse count", cmdRsCfg},

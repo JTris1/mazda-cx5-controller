@@ -32,8 +32,7 @@ bool sendRemoteStart() {
   // Wait for the debounced engine input to go true, or give up.
   uint32_t startedAt = millis();
   while (millis() - startedAt < cfg.rsConfirmMs) {
-    pollEngine();
-    if (engineRunning) {
+    if (engineRunning) {  // kept current by the engine task
       Logf(INFO, "Remote start CONFIRMED after %lu ms", (unsigned long)(millis() - startedAt));
       return true;
     }
