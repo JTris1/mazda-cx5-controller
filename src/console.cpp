@@ -4,6 +4,7 @@
 #include "config.h"
 #include "engine.h"
 #include "log.h"
+#include "net_wifi.h"
 #include "outputs.h"
 #include "remote_start.h"
 #include "util.h"
@@ -185,6 +186,10 @@ static void cmdEngine(int argc, char** argv) {
        digitalRead(ENGINE_RUNNING_PIN) == LOW ? "LOW" : "HIGH");
 }
 
+static void cmdNet(int argc, char** argv) {
+  wifiPrintStatus();
+}
+
 // --- Bench test ------------------------------------------------------------------
 // Holds ONE expander output ON for several seconds so it can be measured with a
 // multimeter. This deliberately exceeds the normal 500 ms hold cap, so it is limited
@@ -262,6 +267,7 @@ static const Command commands[] = {
   {"power",  "power",                         "press the climate power button once (toggles)", cmdPower},
   {"rswait", "rswait <sec>",                  "set how long start waits to confirm the engine", cmdRsWait},
   {"bench",  "bench <name> <sec>",            "hold one output ON for metering (1-30 s)",     cmdBench},
+  {"net",    "net",                           "show Wi-Fi connection and clock status",       cmdNet},
   {"engine", "engine",                        "show engine running status (GWR input)",       cmdEngine},
   {"start",  "start",                         "send the remote-start trigger pulse(s)",       cmdStart},
   {"rscfg",  "rscfg <ms> <gap> <n>",          "set trigger pulse width, gap and pulse count", cmdRsCfg},

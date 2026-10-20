@@ -2,6 +2,7 @@
 #include "console.h"
 #include "engine.h"
 #include "log.h"
+#include "net_wifi.h"
 #include "outputs.h"
 #include "remote_start.h"
 
@@ -14,10 +15,12 @@ void setup() {
   Log(INFO, "Booting...");
 
   outputsBegin();
+  wifiBegin();
   consoleBegin();
 }
 
 void loop() {
   pollEngine();
+  wifiPoll();
   consolePoll();
 }
