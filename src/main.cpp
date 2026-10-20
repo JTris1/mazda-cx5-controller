@@ -2,6 +2,7 @@
 #include "console.h"
 #include "engine.h"
 #include "log.h"
+#include "net_wg.h"
 #include "net_wifi.h"
 #include "outputs.h"
 #include "remote_start.h"
@@ -22,5 +23,6 @@ void setup() {
 void loop() {
   pollEngine();
   wifiPoll();
+  wgPoll();
   consolePoll();
 }
