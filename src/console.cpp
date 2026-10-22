@@ -8,7 +8,7 @@
 #include "engine.h"
 #include "log.h"
 #include "net_wg.h"
-#include "net_wifi.h"
+#include "net_cell.h"
 #include "outputs.h"
 #include "remote_start.h"
 #include "util.h"
@@ -210,7 +210,7 @@ static void cmdEngine(int argc, char** argv) {
 }
 
 static void cmdNet(int argc, char** argv) {
-  wifiPrintStatus();
+  cellPrintStatus();
 }
 
 // wg           show tunnel status
@@ -397,7 +397,7 @@ static const Command commands[] = {
   {"power",  "power",                         "press the climate power button once (toggles)", cmdPower},
   {"rswait", "rswait <sec>",                  "set how long start waits to confirm the engine", cmdRsWait},
   {"bench",  "bench <name> <sec>",            "hold one output ON for metering (1-30 s)",     cmdBench},
-  {"net",    "net",                           "show Wi-Fi connection and clock status",       cmdNet},
+  {"net",    "net",                           "show cellular connection and clock status",       cmdNet},
   {"wg",     "wg [restart]",                  "show WireGuard tunnel status, or restart it",                 cmdWg},
   {"keyadd", "keyadd <id> <role> <key>",      "enroll a client public key (role control|admin)", cmdKeyAdd},
   {"keylist", "keylist",                      "list enrolled keys",                           cmdKeyList},

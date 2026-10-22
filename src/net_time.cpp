@@ -1,6 +1,6 @@
 #include <time.h>
 #include "net_time.h"
-#include "net_wifi.h"
+#include "net_cell.h"
 #include "log.h"
 
 // Any time earlier than this means the clock has not been set (it starts at 1970).
@@ -14,7 +14,7 @@ bool timeSynced() {
 }
 
 void timePoll() {
-  if (!wifiConnected()) return;
+  if (!cellConnected()) return;
 
   if (!started) {
     started = true;

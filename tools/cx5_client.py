@@ -49,9 +49,10 @@ def sign(private_key, nonce, key_id, method, path, body):
 
 
 class Device:
-    def __init__(self, host, fingerprint, key_id, private_key, timeout=30, timing=False):
+    def __init__(self, host, fingerprint, key_id, private_key, timeout=30, timing=False, tls13=False):
         self.host, self.key_id, self.key = host, key_id, private_key
         self.timing = timing
+        self.tls13 = tls13
         self.fingerprint = fingerprint.replace(":", "").lower()
         self.timeout = timeout
 
@@ -59,6 +60,10 @@ class Device:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE          # replaced by the fingerprint pin below
+        if not self.tls13:
+            # TLS 1.2 is what the ESP32 server is known to handle; TLS 1.3 reports a finished handshake
+            # to the client before the server has verified it, which hides server-side failures.
+            ctx.maximum_version = ssl.TLSVersion.TLSv1_2
         conn = http.client.HTTPSConnection(self.host, 443, context=ctx, timeout=self.timeout)
         conn.auto_open = 0   # never reconnect silently: a new connection must go through the pin check
         t0 = time.monotonic()
@@ -121,6 +126,7 @@ def main():
     p.add_argument("--key-id", default=os.environ.get("CX5_KEY_ID"))
     p.add_argument("--key-file", default=os.environ.get("CX5_KEY_FILE"))
     p.add_argument("--timing", action="store_true", help="print how long each step takes")
+    p.add_argument("--tls13", action="store_true", help="allow TLS 1.3 (default is TLS 1.2 only)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     kg = sub.add_parser("keygen", help="create a new private key and print its public key")
@@ -166,7 +172,7 @@ def main():
         return
     if not args.host or not args.fingerprint:
         sys.exit("Set --host and --fingerprint (or CX5_HOST / CX5_FINGERPRINT)")
-    dev = Device(args.host, args.fingerprint, key_id, key, timing=args.timing)
+    dev = Device(args.host, args.fingerprint, key_id, key, timing=args.timing, tls13=args.tls13)
 
     calls = {
         "state": lambda: dev.call("GET", "/api/v1/state"),

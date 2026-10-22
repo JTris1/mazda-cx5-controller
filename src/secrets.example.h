@@ -2,10 +2,9 @@
 // Copy this file to src/secrets.h (which is untracked) and fill in your values.
 // Never commit secrets.h.
 
-// Phone hotspot for the prototype. The ESP32-S3 is 2.4 GHz only: on an iPhone turn on
-// "Maximize Compatibility" for the hotspot.
-constexpr char WIFI_SSID[] = "your-hotspot-name";
-constexpr char WIFI_PASSWORD[] = "your-hotspot-password";
+// Cellular data (SIM7670G modem). Telnyx IoT SIM: APN "data00.telnyx", no username or password.
+constexpr char CELL_APN[] = "data00.telnyx";
+constexpr char CELL_SIM_PIN[] = "";   // only if the SIM is PIN-locked
 
 // --- WireGuard tunnel to the home server (see docs/wireguard-server.md) -----------
 // Leave WG_ENABLED false until the server side is set up.

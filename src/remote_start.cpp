@@ -25,7 +25,7 @@ static uint64_t nowMs() { return (uint64_t)esp_timer_get_time() / 1000ULL; }
 
 bool remoteStartEnabled() {
   Preferences p;
-  p.begin("rs", true);
+  p.begin("rs", false);   // read-write so the namespace is created on first use (read-only logs an error until it exists)
   bool on = p.getBool("enabled", false);
   p.end();
   return on;

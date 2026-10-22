@@ -14,6 +14,15 @@ constexpr int RS_TRIGGER_PIN = 40;
 // pull-up and read LOW as "running". Add a ~1k series resistor in the wiring.
 constexpr int ENGINE_RUNNING_PIN = 39;
 
+// --- Cellular modem: SIM7670G on the LilyGO T-SIM7670G-S3 "Standard" board -------------------
+// (pin numbers from LilyGO's utilities.h, block LILYGO_SIM7670G_S3_STAN). Do not reuse these.
+constexpr int MODEM_TX_PIN = 4;       // ESP32 TX -> modem RX
+constexpr int MODEM_RX_PIN = 5;       // ESP32 RX <- modem TX
+constexpr int MODEM_DTR_PIN = 7;      // held LOW to keep the modem awake
+constexpr int MODEM_RING_PIN = 6;     // modem ring indicator (unused for now)
+constexpr int MODEM_PWRKEY_PIN = 46;  // pulse HIGH for 100 ms to switch the modem on or off
+constexpr uint32_t MODEM_BAUD = 115200;
+
 // --- MCP23017 output channels (expander pin numbers 0-15) ------------------
 // Library pins 0-7 are bank A (GPA0-7), 8-15 are bank B (GPB0-7).
 constexpr uint8_t MCP_ADDR = 0x27;
@@ -29,7 +38,6 @@ constexpr uint8_t FAN_UP_PIN = 2;                // GPA2
 constexpr uint8_t FAN_DOWN_PIN = 1;              // GPA1
 
 constexpr char FIRMWARE_VERSION[] = "0.1.0";
-constexpr bool WIFI_SLEEP_ENABLED = true;   // true saves ~20-30 mA but makes the network slower to respond
 
 // --- Limits -----------------------------------------------------------------
 constexpr uint32_t HOLD_MS_MAX = 500;  // fail-safe: an output is never held longer
