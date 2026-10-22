@@ -14,6 +14,7 @@
 static WireGuard wg;
 static bool started = false;
 static uint32_t startedAt = 0;
+static uint32_t nextTry = 0;   // do not retry a failed start before this time (millis)
 
 bool wgStarted() {
   return started;
@@ -38,15 +39,15 @@ void wgPoll() {
     return;
   }
 
-  if (!started && wifiConnected() && timeSynced()) {
+  if (!started && wifiConnected() && timeSynced() && (int32_t)(millis() - nextTry) >= 0) {
     Logf(INFO, "WireGuard: starting tunnel to %s:%u (may take a few seconds)", WG_ENDPOINT, WG_PORT);
     // Show what the endpoint name resolves to from this network (the library resolves it itself).
     IPAddress endpointIp;
     if (WiFi.hostByName(WG_ENDPOINT, endpointIp)) {
       Logf(INFO, "WireGuard: %s resolves to %s", WG_ENDPOINT, endpointIp.toString().c_str());
     } else {
-      Logf(ERROR, "WireGuard: cannot resolve %s from this network", WG_ENDPOINT);
-      delay(5000);
+      Logf(ERROR, "WireGuard: cannot resolve %s from this network, retrying in 30 s", WG_ENDPOINT);
+      nextTry = millis() + 30000;
       return;
     }
     IPAddress localIp;
@@ -60,8 +61,8 @@ void wgPoll() {
       startedAt = millis();
       Logf(INFO, "WireGuard: started, tunnel address %s", WG_LOCAL_IP);
     } else {
-      Log(ERROR, "WireGuard: begin() failed (endpoint lookup or keys), will retry");
-      delay(5000);
+      Log(ERROR, "WireGuard: begin() failed (endpoint lookup or keys), retrying in 30 s");
+      nextTry = millis() + 30000;
     }
   }
 }

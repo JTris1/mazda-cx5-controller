@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include "console.h"
 #include "actions.h"
+#include "api.h"
+#include "auth.h"
 #include "climate.h"
 #include "config.h"
 #include "engine.h"
@@ -213,12 +215,103 @@ static void cmdNet(int argc, char** argv) {
 
 // wg           show tunnel status
 // wg restart   stop the tunnel and let it start again (a new handshake attempt)
+static void cmdApi(int argc, char** argv) {
+  apiPrintStatus();
+}
+
 static void cmdWg(int argc, char** argv) {
   if (argc >= 2 && strcasecmp(argv[1], "restart") == 0) {
     wgRestart();
     return;
   }
   wgPrintStatus();
+}
+
+// --- Authentication commands -------------------------------------------------------------
+// keyadd <id> <control|admin> <base64 public key>
+static void cmdKeyAdd(int argc, char** argv) {
+  Role role = Role::Control;
+  bool roleOk = false;
+  if (argc >= 4 && strcasecmp(argv[2], "admin") == 0) { role = Role::Admin; roleOk = true; }
+  if (argc >= 4 && strcasecmp(argv[2], "control") == 0) { role = Role::Control; roleOk = true; }
+  if (!roleOk) {
+    Log(WARN, "Usage: keyadd <id> <control|admin> <base64 public key (65 bytes, 04||X||Y)>");
+    return;
+  }
+  uint8_t pub[65];
+  if (!authParsePublicKey(argv[3], pub)) {
+    Log(ERROR, "Not a valid P-256 public key (expect base64 of the 65-byte uncompressed point)");
+    return;
+  }
+  switch (authKeyAdd(argv[1], role, pub)) {
+    case KeyAdd::Ok: {
+      char fp[17];
+      authFingerprint(pub, fp);
+      Logf(INFO, "Key '%s' enrolled as %s (fingerprint %s)", argv[1], roleName(role), fp);
+      break;
+    }
+    case KeyAdd::BadId:   Log(ERROR, "Key id must be 1-15 characters: letters, digits, - or _"); break;
+    case KeyAdd::BadRole: Log(ERROR, "Bad role"); break;
+    case KeyAdd::BadKey:  Log(ERROR, "Public key rejected"); break;
+    case KeyAdd::Full:    Logf(ERROR, "Key store is full (%d keys). Remove one first", AUTH_MAX_KEYS); break;
+  }
+}
+
+static void cmdKeyList(int argc, char** argv) {
+  int n = authKeyCount();
+  if (n == 0) {
+    Log(INFO, "No keys enrolled. Remote commands cannot be authorized yet");
+    return;
+  }
+  KeyInfo k;
+  for (int i = 0; i < n && authKeyAt(i, k); i++) {
+    char fp[17];
+    authFingerprint(k.pub, fp);
+    Logf(INFO, "  %-15s %-8s fingerprint %s", k.id, roleName(k.role), fp);
+  }
+}
+
+static void cmdKeyDel(int argc, char** argv) {
+  if (argc < 2) {
+    Log(WARN, "Usage: keydel <id>");
+    return;
+  }
+  if (authKeyRemove(argv[1])) {
+    Logf(INFO, "Key '%s' removed", argv[1]);
+  } else {
+    Logf(WARN, "No key named '%s'", argv[1]);
+  }
+}
+
+static void cmdKeyWipe(int argc, char** argv) {
+  if (argc < 2 || strcasecmp(argv[1], "yes") != 0) {
+    Log(WARN, "This removes every enrolled key. Run 'keywipe yes' to confirm");
+    return;
+  }
+  authKeyWipe();
+  Log(INFO, "All keys removed");
+}
+
+static void cmdAuthLog(int argc, char** argv) {
+  authPrintLog();
+}
+
+static void cmdAuthTest(int argc, char** argv) {
+  authSelfTest();
+}
+
+// rsenable [on|off]   (without an argument it shows the current state)
+static void cmdRsEnable(int argc, char** argv) {
+  if (argc >= 2 && strcasecmp(argv[1], "on") == 0) {
+    setRemoteStartEnabled(true);
+  } else if (argc >= 2 && strcasecmp(argv[1], "off") == 0) {
+    setRemoteStartEnabled(false);
+  } else if (argc >= 2) {
+    Log(WARN, "Usage: rsenable [on|off]");
+    return;
+  }
+  Logf(INFO, "Remote start over the network is %s (the serial 'start' command always works)",
+       remoteStartEnabled() ? "ENABLED" : "disabled");
 }
 
 // --- Bench test ------------------------------------------------------------------
@@ -306,6 +399,14 @@ static const Command commands[] = {
   {"bench",  "bench <name> <sec>",            "hold one output ON for metering (1-30 s)",     cmdBench},
   {"net",    "net",                           "show Wi-Fi connection and clock status",       cmdNet},
   {"wg",     "wg [restart]",                  "show WireGuard tunnel status, or restart it",                 cmdWg},
+  {"keyadd", "keyadd <id> <role> <key>",      "enroll a client public key (role control|admin)", cmdKeyAdd},
+  {"keylist", "keylist",                      "list enrolled keys",                           cmdKeyList},
+  {"keydel", "keydel <id>",                   "remove an enrolled key",                       cmdKeyDel},
+  {"keywipe", "keywipe yes",                  "remove every enrolled key",                    cmdKeyWipe},
+  {"authlog", "authlog",                      "show recent authentication attempts",          cmdAuthLog},
+  {"authtest", "authtest",                    "run the built-in authentication self-test",    cmdAuthTest},
+  {"rsenable", "rsenable [on|off]",           "allow or forbid network-requested remote start", cmdRsEnable},
+  {"api",    "api",                           "show HTTPS API status and certificate fingerprint", cmdApi},
   {"engine", "engine",                        "show engine running status (GWR input)",       cmdEngine},
   {"start",  "start",                         "send the remote-start trigger pulse(s)",       cmdStart},
   {"rscfg",  "rscfg <ms> <gap> <n>",          "set trigger pulse width, gap and pulse count", cmdRsCfg},
@@ -347,8 +448,9 @@ void consoleBegin() {
 }
 
 void consolePoll() {
-  static char line[64];
+  static char line[200];   // long enough for "keyadd <id> <role> <88-character public key>"
   static size_t len = 0;
+  static bool overflow = false;  // the line did not fit: reject it instead of running a cut-off command
   static char prev = 0;  // previous byte, to treat "\r\n" as a single Enter
   while (Serial.available()) {
     char c = Serial.read();
@@ -360,17 +462,26 @@ void consolePoll() {
     if (c == '\r' || c == '\n') {
       Serial.println();  // echo the Enter key
       line[len] = '\0';
+      if (overflow) {
+        Logf(ERROR, "Line too long (limit %u characters): ignored", (unsigned)(sizeof(line) - 1));
+      } else {
+        runLine(line);
+      }
       len = 0;
-      runLine(line);
+      overflow = false;
       printPrompt();  // ready for the next command
     } else if (c == '\b' || c == 0x7F) {
       if (len > 0) {
         len--;
         Serial.print("\b \b");  // step back, blank the character, step back
       }
+    } else if (c < 0x20 || c > 0x7E) {
+      // Ignore other control and non-ASCII bytes, e.g. the escape sequences an arrow key sends.
     } else if (len < sizeof(line) - 1) {
       line[len++] = c;
       Serial.write(c);  // echo what was actually stored
+    } else {
+      overflow = true;
     }
   }
 }

@@ -2,33 +2,34 @@
 #include <Arduino.h>
 
 // --- Pins (native ESP32-S3 GPIO) -------------------------------------------
-constexpr int PIN_I2C_SDA = 8;
-constexpr int PIN_I2C_SCL = 9;
+constexpr int PIN_I2C_SDA = 3;
+constexpr int PIN_I2C_SCL = 2;
 
 // Remote-start trigger: drives a PC817 that pulls the iDatastart trigger wire to
 // ground. Native GPIO on purpose, not the expander, so it stays independent of I2C.
-// TODO: confirm this pin is free and broken out on your board.
-constexpr int RS_TRIGGER_PIN = 14;
+constexpr int RS_TRIGGER_PIN = 40;
 
 // Engine-running input: the iDatastart GWR output (M2-06 BLUE/WHITE) grounds this wire
 // while the engine runs and leaves it floating otherwise, so we use the internal
 // pull-up and read LOW as "running". Add a ~1k series resistor in the wiring.
-// TODO: confirm this pin is free and broken out on your board.
-constexpr int ENGINE_RUNNING_PIN = 21;
+constexpr int ENGINE_RUNNING_PIN = 39;
 
 // --- MCP23017 output channels (expander pin numbers 0-15) ------------------
 // Library pins 0-7 are bank A (GPA0-7), 8-15 are bank B (GPB0-7).
 constexpr uint8_t MCP_ADDR = 0x27;
 
-constexpr uint8_t TEMP_UP_PIN = 0;                // GPA0
-constexpr uint8_t TEMP_DOWN_PIN = 1;              // GPA1
-constexpr uint8_t DRIVER_SEAT_HEATER_PIN = 2;     // GPA2
-constexpr uint8_t PASSENGER_SEAT_HEATER_PIN = 3;  // GPA3
+constexpr uint8_t TEMP_UP_PIN = 8;                // GPB0
+constexpr uint8_t TEMP_DOWN_PIN = 7;              // GPA7
+constexpr uint8_t DRIVER_SEAT_HEATER_PIN = 6;     // GPA6
+constexpr uint8_t PASSENGER_SEAT_HEATER_PIN = 5;  // GPA5
 constexpr uint8_t FRONT_DEFROST_PIN = 4;          // GPA4
-constexpr uint8_t CLIMATE_POWER_PIN = 8;          // GPB0
-constexpr uint8_t REAR_DEFROST_PIN = 9;           // GPB1
-constexpr uint8_t FAN_UP_PIN = 10;                // GPB2
-constexpr uint8_t FAN_DOWN_PIN = 11;              // GPB3
+constexpr uint8_t CLIMATE_POWER_PIN = 0;          // GPA0
+constexpr uint8_t REAR_DEFROST_PIN = 3;           // GPA3
+constexpr uint8_t FAN_UP_PIN = 2;                // GPA2
+constexpr uint8_t FAN_DOWN_PIN = 1;              // GPA1
+
+constexpr char FIRMWARE_VERSION[] = "0.1.0";
+constexpr bool WIFI_SLEEP_ENABLED = true;   // true saves ~20-30 mA but makes the network slower to respond
 
 // --- Limits -----------------------------------------------------------------
 constexpr uint32_t HOLD_MS_MAX = 500;  // fail-safe: an output is never held longer

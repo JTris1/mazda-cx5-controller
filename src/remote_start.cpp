@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <Preferences.h>
+#include <esp_timer.h>
 #include "remote_start.h"
 #include "config.h"
 #include "engine.h"
@@ -8,6 +10,64 @@ void remoteStartBegin() {
   // Safe state first: the trigger output must be LOW before anything else runs.
   pinMode(RS_TRIGGER_PIN, OUTPUT);
   digitalWrite(RS_TRIGGER_PIN, LOW);
+}
+
+// --- policy for network-requested starts -----------------------------------------------
+static constexpr uint32_t COOLDOWN_MS = 60UL * 1000;
+static constexpr uint32_t HOUR_MS = 3600UL * 1000;
+static constexpr uint32_t DAY_MS = 24UL * HOUR_MS;
+static constexpr int HOURLY_LIMIT = 3;
+static constexpr int DAILY_LIMIT = 10;
+static uint64_t startTimes[DAILY_LIMIT];
+static int startCount = 0;
+
+static uint64_t nowMs() { return (uint64_t)esp_timer_get_time() / 1000ULL; }
+
+bool remoteStartEnabled() {
+  Preferences p;
+  p.begin("rs", true);
+  bool on = p.getBool("enabled", false);
+  p.end();
+  return on;
+}
+
+void setRemoteStartEnabled(bool on) {
+  Preferences p;
+  p.begin("rs", false);
+  p.putBool("enabled", on);
+  p.end();
+}
+
+bool remoteStartPolicyAllow(const char** reason) {
+  if (!remoteStartEnabled()) {
+    *reason = "remote start is disabled";
+    return false;
+  }
+  uint64_t now = nowMs();
+  int hourly = 0;
+  uint64_t last = 0;
+  int kept = 0;
+  for (int i = 0; i < startCount; i++) {   // drop entries older than a day while counting
+    if (now - startTimes[i] > DAY_MS) continue;
+    startTimes[kept++] = startTimes[i];
+    if (now - startTimes[i] <= HOUR_MS) hourly++;
+    if (startTimes[i] > last) last = startTimes[i];
+  }
+  startCount = kept;
+  if (startCount > 0 && now - last < COOLDOWN_MS) {
+    *reason = "cooldown: wait 60 s between starts";
+    return false;
+  }
+  if (hourly >= HOURLY_LIMIT) {
+    *reason = "hourly limit reached";
+    return false;
+  }
+  if (startCount >= DAILY_LIMIT) {
+    *reason = "daily limit reached";
+    return false;
+  }
+  startTimes[startCount++] = now;
+  return true;
 }
 
 // HIGH turns the optocoupler on, which pulls the module's trigger wire to ground.

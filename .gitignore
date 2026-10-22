@@ -6,3 +6,9 @@
 
 # Local secrets (Wi-Fi, keys): never commit
 src/secrets.h
+src/tls_cert.h
+
+# Vendored esp32_https_server: keep only what the build needs
+lib/esp32_https_server/docs/
+lib/esp32_https_server/examples/
+lib/esp32_https_server/extras/

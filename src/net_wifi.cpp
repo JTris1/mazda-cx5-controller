@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include "net_wifi.h"
+#include "config.h"
 #include "log.h"
 #include "net_time.h"
 
@@ -32,6 +33,9 @@ void wifiBegin() {
   WiFi.persistent(false);       // do not write credentials to flash
   WiFi.setAutoReconnect(false); // we manage retries (backoff) ourselves
   WiFi.setHostname("cx5-controller");
+  // Modem sleep adds up to a few hundred ms to every packet, which makes a TLS handshake (many
+  // round trips) take seconds. Fine on the bench; revisit when battery drain matters.
+  WiFi.setSleep(WIFI_SLEEP_ENABLED);
   startAttempt();
 }
 
