@@ -1,0 +1,37 @@
+# Example Lovelace view. Replace the entity ids with yours (Settings > Entities, search "CX-5").
+title: Car
+path: car
+cards:
+  - type: thermostat
+    entity: climate.cx_5_climate_remote
+    features:
+      - type: climate-fan-modes
+  - type: entities
+    title: Seats and glass
+    entities:
+      - select.cx_5_climate_remote_driver_seat_heater
+      - select.cx_5_climate_remote_passenger_seat_heater
+      - switch.cx_5_climate_remote_front_defrost
+      - switch.cx_5_climate_remote_rear_defrost
+  - type: entities
+    title: Remote start
+    entities:
+      - entity: sensor.cx_5_climate_remote_remote_start_status
+      - entity: binary_sensor.cx_5_climate_remote_engine
+      - type: button
+        name: Remote start
+        entity: button.cx_5_climate_remote_remote_start
+        action_name: START
+        tap_action:
+          action: perform-action
+          perform_action: button.press
+          target:
+            entity_id: button.cx_5_climate_remote_remote_start
+          confirmation:
+            text: Start the engine? Make sure the car is clear and in a safe place.
+  - type: entities
+    title: Status
+    entities:
+      - binary_sensor.cx_5_climate_remote_connectivity
+      - sensor.cx_5_climate_remote_last_command
+      - button.cx_5_climate_remote_reset_tracked_state

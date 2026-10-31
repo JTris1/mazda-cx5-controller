@@ -8,5 +8,8 @@ void apiPoll();
 
 bool apiRunning();
 
+// SHA-256 fingerprint of the HTTPS certificate ("AA:BB:..."), for the admin page and Home Assistant setup.
+const char* apiCertFingerprint();
+
 // One-shot report used by the "api" console command.
 void apiPrintStatus();

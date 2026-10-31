@@ -1,6 +1,7 @@
 #include "engine.h"
 #include "config.h"
 #include "log.h"
+#include "vehicle_state.h"
 
 volatile bool engineRunning = false;
 static bool engineCandidate = false;       // most recent raw reading
@@ -29,6 +30,7 @@ void pollEngine() {
     engineRunning = engineCandidate;
     engineChangedAt = now;
     Log(INFO, engineRunning ? "Engine running" : "Engine stopped");
+    if (!engineRunning) vstateEngineStopped();
   }
 }
 

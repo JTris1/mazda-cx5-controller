@@ -147,7 +147,7 @@ void authBegin() {
   memset(nonces, 0, sizeof(nonces));
   memset(ips, 0, sizeof(ips));
   prefs.begin("auth", false);
-  if (prefs.getBytesLength("keys") == sizeof(keys)) {
+  if (prefs.isKey("keys") && prefs.getBytesLength("keys") == sizeof(keys)) {
     prefs.getBytes("keys", keys, sizeof(keys));
   }
   Logf(INFO, "Auth: %d enrolled key(s)", authKeyCount());
@@ -406,6 +406,18 @@ void authPrintLog() {
          (e.ip >> 24) & 255, (e.ip >> 16) & 255, (e.ip >> 8) & 255, e.ip & 255, e.keyId,
          authResultText(e.result));
   }
+}
+
+bool authLogAt(int index, AuthLogItem& out) {
+  Lock l;
+  int count = logCount < LOG_SIZE ? logCount : LOG_SIZE;
+  if (index < 0 || index >= count) return false;
+  const LogEntry& e = logRing[(logCount - 1 - index) % LOG_SIZE];
+  out.ageSeconds = (uint32_t)((nowMs() - e.ms) / 1000);
+  out.ip = e.ip;
+  out.result = e.result;
+  strcpy(out.keyId, e.keyId);
+  return true;
 }
 
 // --- self test --------------------------------------------------------------------------

@@ -25,5 +25,9 @@ void climateSetDefrost(DefrostZone zone, bool wantOn);
 // Fan speed up/down button n times.
 void climateFanStep(bool up, int n);
 
+// Absolute fan speed 1..cfg.fanSteps: press down enough to reach the lowest speed, then up. level must
+// already be within range.
+void climateSetFan(int level);
+
 // Climate power button: a momentary switch, one press toggles. No state is tracked.
 void climatePowerPress();

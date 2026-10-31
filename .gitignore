@@ -12,3 +12,7 @@ src/tls_cert.h
 lib/esp32_https_server/docs/
 lib/esp32_https_server/examples/
 lib/esp32_https_server/extras/
+src/admin_page.gen.h
+__pycache__/
+.pytest_cache/
+.venv/

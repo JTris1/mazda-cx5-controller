@@ -1,0 +1,43 @@
+resync:
+  name: Resync tracked state
+  description: >
+    Tell the controller what the car really shows (after someone used the physical buttons). Nothing is
+    pressed; only the controller's remembered state changes. Leave a field out to keep it as it is.
+  fields:
+    config_entry_id:
+      name: Config entry
+      description: Only needed if you have more than one controller.
+      required: false
+      selector:
+        config_entry:
+          integration: cx5_controller
+    temperature:
+      name: Temperature (F)
+      required: false
+      selector:
+        number: {min: 60, max: 84, mode: box}
+    fan:
+      name: Fan speed
+      required: false
+      selector:
+        number: {min: 1, max: 7, mode: box}
+    driver_heater:
+      name: Driver seat heater
+      required: false
+      selector:
+        select: {options: [off, low, medium, high]}
+    passenger_heater:
+      name: Passenger seat heater
+      required: false
+      selector:
+        select: {options: [off, low, medium, high]}
+    front_defrost:
+      name: Front defrost
+      required: false
+      selector:
+        boolean: {}
+    rear_defrost:
+      name: Rear defrost
+      required: false
+      selector:
+        boolean: {}

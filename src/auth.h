@@ -67,6 +67,10 @@ AuthOutcome authVerify(const AuthRequest& req, Role needed);
 const char* authResultText(AuthResult r);
 void authPrintLog();
 
+// The same log as data, newest first (index 0 is the latest). False when index is past the end.
+struct AuthLogItem { uint32_t ageSeconds; uint32_t ip; AuthResult result; char keyId[AUTH_ID_MAX + 1]; };
+bool authLogAt(int index, AuthLogItem& out);
+
 // Runs the built-in tests (OpenSSL-made vector, nonce reuse and expiry, rate limit,
 // roles). Prints one line per check and returns true only if all pass.
 bool authSelfTest();

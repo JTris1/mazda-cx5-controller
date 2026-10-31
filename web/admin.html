@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>CX-5 controller admin</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#1b1f24;--muted:#5b6672;--line:#d9dee4;--accent:#0b5fd1;--accent-text:#fff;--ok:#18794e;--warn:#9a5b00;--warn-bg:#fff4dc;--bad:#b42318;--bad-bg:#fde8e6;--focus:#0b5fd1}
+@media (prefers-color-scheme:dark){:root{--bg:#12161b;--card:#1b2128;--text:#e8ecf0;--muted:#98a4b0;--line:#323b45;--accent:#5aa2ff;--accent-text:#06101f;--ok:#4cc38a;--warn:#f0b24a;--warn-bg:#3a2e12;--bad:#ff8a80;--bad-bg:#3d1c1a;--focus:#5aa2ff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:860px;margin:0 auto;padding:16px}
+header{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;margin-bottom:12px}
+h1{font-size:1.35rem;margin:0}
+h2{font-size:1.05rem;margin:0 0 10px}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin:0 0 14px}
+p{margin:0 0 10px}
+.muted{color:var(--muted);font-size:.92rem}
+.chip{display:inline-block;padding:2px 10px;border-radius:99px;border:1px solid var(--line);font-size:.85rem}
+.chip.ok{color:var(--ok);border-color:var(--ok)}.chip.bad{color:var(--bad);border-color:var(--bad)}
+.notice{border-radius:8px;padding:10px 12px;margin:0 0 12px;border:1px solid}
+.notice.warn{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)}
+.notice.bad{background:var(--bad-bg);color:var(--bad);border-color:var(--bad)}
+button,input,select,textarea{font:inherit;color:inherit}
+button{min-height:44px;padding:0 16px;border-radius:8px;border:1px solid var(--line);background:var(--card);cursor:pointer}
+button.primary{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
+button.danger{color:var(--bad);border-color:var(--bad)}
+button:disabled{opacity:.5;cursor:not-allowed}
+button.small{min-height:36px;padding:0 10px}
+input,select,textarea{min-height:44px;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);width:100%}
+textarea{min-height:80px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85rem}
+:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+label{display:block;font-weight:600;margin:0 0 4px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:0 0 10px}
+.row>*{flex:1 1 180px}.row>button{flex:0 0 auto}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;margin:0}dt{color:var(--muted)}dd{margin:0;word-break:break-word}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{color:var(--muted);font-weight:600;font-size:.88rem}
+td.actions{white-space:nowrap}
+code,.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85rem;word-break:break-all}
+.scroll{overflow-x:auto}
+#toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);max-width:92vw;z-index:10}
+#toast div{background:var(--text);color:var(--bg);padding:10px 14px;border-radius:8px;margin-top:8px;box-shadow:0 4px 14px #0004}
+#toast div.bad{background:var(--bad);color:#fff}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--text);max-width:min(440px,92vw)}
+dialog::backdrop{background:#0008}
+.hidden{display:none!important}
+@media (max-width:520px){main{padding:12px}dl{grid-template-columns:1fr}dt{margin-top:6px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>CX-5 controller</h1>
+  <span id="conn" class="chip" role="status">connecting…</span>
+</header>
+<div id="notice"></div>
+
+<section id="identity" aria-labelledby="h-id">
+  <h2 id="h-id">This browser</h2>
+  <div id="identity-body"></div>
+</section>
+
+<div id="admin" class="hidden">
+  <section aria-labelledby="h-dev"><h2 id="h-dev">Device</h2><dl id="info"></dl></section>
+
+  <section aria-labelledby="h-ha">
+    <h2 id="h-ha">Connect Home Assistant</h2>
+    <p class="muted">Home Assistant's setup asks for these. It can create its own key during setup; you then paste the public key it shows into "Add a key" below with the <b>control</b> role.</p>
+    <dl id="ha-details"></dl>
+  </section>
+
+  <section aria-labelledby="h-keys">
+    <h2 id="h-keys">Keys</h2>
+    <p class="muted">Each phone, laptop or Home Assistant has its own key. The device stores only public keys, so a stolen device cannot sign commands. Give Home Assistant a <b>control</b> key.</p>
+    <div class="scroll"><table><thead><tr><th>Id</th><th>Role</th><th>Fingerprint</th><th></th></tr></thead><tbody id="keys"></tbody></table></div>
+    <h3 style="font-size:1rem;margin:16px 0 8px">Add a key</h3>
+    <form id="addkey" autocomplete="off">
+      <div class="row">
+        <div><label for="k-id">Key id</label><input id="k-id" maxlength="15" required pattern="[A-Za-z0-9_\-]{1,15}"></div>
+        <div><label for="k-role">Role</label><select id="k-role"><option value="control">control</option><option value="admin">admin</option></select></div>
+      </div>
+      <label for="k-pub">Public key (base64)</label>
+      <textarea id="k-pub" required spellcheck="false" placeholder="BF…"></textarea>
+      <p class="muted">Print it with <code>python3 tools/cx5_client.py pubkey</code>, or copy it from another browser's admin page.</p>
+      <button class="primary" type="submit">Add key</button>
+    </form>
+  </section>
+
+  <section aria-labelledby="h-set">
+    <h2 id="h-set">Settings</h2>
+    <p class="muted">Saved to the device's flash. Changes are refused while a command is running.</p>
+    <form id="settings"></form>
+  </section>
+
+  <section aria-labelledby="h-rs">
+    <h2 id="h-rs">Remote start</h2>
+    <p>Network remote start is <b id="rs-state">…</b>. It also has a 60 s cooldown and hourly/daily limits that cannot be changed here.</p>
+    <button id="rs-toggle"></button>
+  </section>
+
+  <section aria-labelledby="h-log">
+    <h2 id="h-log">Sign-in log</h2>
+    <p class="muted">Recent attempts, newest first. The device keeps the last 32 in RAM.</p>
+    <div class="scroll"><table><thead><tr><th>When</th><th>Key</th><th>From</th><th>Result</th></tr></thead><tbody id="log"></tbody></table></div>
+    <button id="log-refresh" class="small" style="margin-top:8px">Refresh</button>
+  </section>
+
+  <section aria-labelledby="h-fw">
+    <h2 id="h-fw">Firmware update</h2>
+    <div id="fw-probation" class="notice warn hidden" role="status">This controller is running a new firmware on probation. It is confirmed after 3 minutes of healthy running (cellular, tunnel and API up). If it restarts or never gets healthy, it goes back to the previous firmware by itself.</div>
+    <p class="muted">Choose the <code>firmware.bin</code> built by PlatformIO (<code>.pio/build/&lt;env&gt;/firmware.bin</code>). The browser checks it, signs its hash with your key, then uploads it to the spare slot. Nothing changes until you restart. Refused while a command runs or the engine is on.</p>
+    <div class="row">
+      <div><label for="fw-file">Firmware file</label><input id="fw-file" type="file" accept=".bin,application/octet-stream"></div>
+    </div>
+    <dl id="fw-meta" class="hidden"></dl>
+    <div id="fw-progress" class="hidden" style="margin:10px 0">
+      <progress id="fw-bar" max="100" value="0" style="width:100%" aria-label="Upload progress"></progress>
+      <div id="fw-status" class="muted" role="status"></div>
+    </div>
+    <div class="row">
+      <button id="fw-upload" class="primary" disabled>Upload to spare slot</button>
+      <button id="fw-reboot" class="hidden">Restart into the new firmware</button>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-reboot">
+    <h2 id="h-reboot">Restart</h2>
+    <p class="muted">Restarts the controller. Tracked climate state and settings are kept.</p>
+    <button id="reboot" class="danger">Restart controller</button>
+  </section>
+</div>
+</main>
+
+<div id="toast" aria-live="polite"></div>
+<dialog id="dlg"><form method="dialog"><p id="dlg-text"></p><div class="row"><button value="no">Cancel</button><button value="yes" class="primary" id="dlg-yes">OK</button></div></form></dialog>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const enc = new TextEncoder();
+const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (v === true) el.setAttribute(k, "");
+    else if (v !== false && v != null) el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) if (kid != null) el.append(kid);
+  return el;
+}
+
+function toast(text, bad) {
+  const t = h("div", { class: bad ? "bad" : "" }, text);
+  $("#toast").append(t);
+  setTimeout(() => t.remove(), bad ? 8000 : 3500);
+}
+
+function confirmDialog(text, yes = "OK") {
+  return new Promise((resolve) => {
+    const d = $("#dlg");
+    $("#dlg-text").textContent = text;
+    $("#dlg-yes").textContent = yes;
+    d.addEventListener("close", () => resolve(d.returnValue === "yes"), { once: true });
+    d.showModal();
+  });
+}
+
+// ---- the browser's signing key, kept non-extractable in IndexedDB ------------------------------
+const idb = {
+  open: () => new Promise((res, rej) => {
+    const r = indexedDB.open("cx5-admin", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("keys");
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  }),
+  async get() {
+    const db = await this.open();
+    return new Promise((res, rej) => { const q = db.transaction("keys").objectStore("keys").get("main"); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+  },
+  async put(v) {
+    const db = await this.open();
+    return new Promise((res, rej) => { const q = db.transaction("keys", "readwrite").objectStore("keys").put(v, "main"); q.onsuccess = () => res(); q.onerror = () => rej(q.error); });
+  },
+  async del() {
+    const db = await this.open();
+    return new Promise((res, rej) => { const q = db.transaction("keys", "readwrite").objectStore("keys").delete("main"); q.onsuccess = () => res(); q.onerror = () => rej(q.error); });
+  },
+};
+
+let me = null;        // {keyId, privateKey, publicB64, fingerprint}
+let role = null;      // "admin" | "control" | null (not enrolled)
+let setupOpen = false;
+
+async function fingerprintOf(pubBytes) {
+  return hex(await crypto.subtle.digest("SHA-256", pubBytes)).slice(0, 16);   // same as the device's key list
+}
+
+async function createKey(keyId) {
+  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+  const raw = await crypto.subtle.exportKey("raw", pair.publicKey);
+  const rec = { keyId, privateKey: pair.privateKey, publicB64: b64(raw), fingerprint: await fingerprintOf(raw) };
+  await idb.put(rec);
+  me = rec;
+}
+
+// ---- signed API calls (same scheme as tools/cx5_client.py) -----------------------------------------
+class ApiError extends Error { constructor(status, code, data) { super(code); this.status = status; this.code = code; this.data = data; } }
+
+async function plain(method, path, bodyObj) {
+  let r;
+  try {
+    r = await fetch(path, { method, body: bodyObj ? JSON.stringify(bodyObj) : undefined, cache: "no-store" });
+  } catch (e) { throw new ApiError(0, "unreachable"); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new ApiError(r.status, data.error || "error", data);
+  return data;
+}
+
+// The controller serves two connections at a time, so every call waits for the previous one.
+let queue = Promise.resolve();
+function api(method, path, bodyObj) {
+  const run = queue.then(() => apiNow(method, path, bodyObj));
+  queue = run.catch(() => {});
+  return run;
+}
+
+async function apiNow(method, path, bodyObj) {
+  if (!me) throw new ApiError(0, "no_key");
+  const ch = await plain("GET", "/api/v1/challenge");
+  const body = bodyObj === undefined ? "" : JSON.stringify(bodyObj);
+  const bodyHash = hex(await crypto.subtle.digest("SHA-256", enc.encode(body)));
+  const text = ["CX5-V1", ch.nonce, me.keyId, method, path, bodyHash].join("\n");
+  const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, me.privateKey, enc.encode(text));
+  let r;
+  try {
+    r = await fetch(path, {
+      method, cache: "no-store", body: body || undefined,
+      headers: { "X-CX5-Key": me.keyId, "X-CX5-Nonce": ch.nonce, "X-CX5-Signature": b64(sig), ...(body ? { "Content-Type": "application/json" } : {}) },
+    });
+  } catch (e) { throw new ApiError(0, "unreachable"); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new ApiError(r.status, data.error || "error", data);
+  return data;
+}
+
+function explain(e) {
+  if (!(e instanceof ApiError)) return String(e && e.message || e);
+  switch (e.status) {
+    case 0: return e.code === "no_key" ? "This browser has no key yet." : "Cannot reach the controller. Is the car awake and the tunnel up?";
+    case 401: return "The controller does not accept this browser's key (not enrolled, revoked, or the request was too slow).";
+    case 403: return "This key is not allowed to do that (admin role needed).";
+    case 409: return ({ cannot_delete_own_key: "You cannot revoke the key you are signed in with.", cannot_change_own_role: "You cannot change your own role.", key_store_full: "The device holds at most 8 keys. Revoke one first.", setup_closed: "Setup is closed: the device already has a key." })[e.code] || e.code;
+    case 429: return "Too many attempts. Wait a minute.";
+    case 503: return e.code === "busy" ? "The car is busy with a command. Try again in a few seconds." : e.code;
+    case 400: return e.data && e.data.reason ? e.data.reason : ({ invalid_public_key: "That is not a valid public key (base64 of a 65-byte P-256 point).", invalid_arguments: "The controller rejected those values (check the id and role).", invalid_json: "The controller could not read the request." })[e.code] || "The controller rejected the values (" + e.code + ").";
+    default: return e.code;
+  }
+}
+const guard = (fn) => async (...a) => { try { return await fn(...a); } catch (e) { toast(explain(e), true); } };
+
+// ---- identity section ------------------------------------------------------------------------------------
+function showNotice(kind, text) {
+  $("#notice").replaceChildren(text ? h("div", { class: "notice " + kind, role: kind === "bad" ? "alert" : "status" }, text) : "");
+}
+
+function copyButton(text, label) {
+  return h("button", { class: "small", type: "button", onclick: async () => { try { await navigator.clipboard.writeText(text); toast("Copied"); } catch { toast("Select the text and copy it by hand", true); } } }, label);
+}
+
+function renderIdentity() {
+  const body = $("#identity-body");
+  const parts = [];
+  if (!me) {
+    parts.push(h("p", {}, setupOpen
+      ? "This controller has no keys yet. Create the first admin key in this browser."
+      : "Create a key in this browser. An admin then has to enroll its public key on the controller before it works."));
+    if (setupOpen) parts.push(h("div", { class: "notice warn" }, "While the controller has no keys, anything that can reach it on the tunnel could claim it as the first admin. Do this only on your own network, and do it now rather than later."));
+    const input = h("input", { id: "new-id", maxlength: 15, value: "admin-web", pattern: "[A-Za-z0-9_\\-]{1,15}", "aria-label": "Key id" });
+    parts.push(h("div", { class: "row" }, h("div", {}, h("label", { for: "new-id" }, "Key id"), input),
+      h("button", { class: "primary", onclick: guard(async () => {
+        if (!/^[A-Za-z0-9_-]{1,15}$/.test(input.value)) { toast("Use 1-15 letters, digits, - or _", true); return; }
+        await createKey(input.value);
+        if (setupOpen) {
+          await plain("POST", "/api/v1/setup/first-key", { id: me.keyId, public_key: me.publicB64 });
+          toast("First admin key enrolled");
+        }
+        await refresh();
+      }) }, setupOpen ? "Create the first admin key" : "Create key")));
+  } else {
+    const dl = h("dl", {}, h("dt", {}, "Key id"), h("dd", {}, me.keyId), h("dt", {}, "Fingerprint"), h("dd", { class: "mono" }, me.fingerprint),
+      h("dt", {}, "Role"), h("dd", {}, role || "not enrolled on this controller"));
+    parts.push(dl);
+    parts.push(h("p", { class: "muted", style: "margin-top:10px" }, "The private key stays in this browser and cannot be exported. Public key:"));
+    parts.push(h("div", { class: "mono", id: "mypub" }, me.publicB64));
+    const row = h("div", { class: "row", style: "margin-top:10px" }, copyButton(me.publicB64, "Copy public key"));
+    if (!role && setupOpen) row.append(h("button", { class: "primary", onclick: guard(async () => { await plain("POST", "/api/v1/setup/first-key", { id: me.keyId, public_key: me.publicB64 }); toast("Enrolled as first admin"); await refresh(); }) }, "Enroll this browser as first admin"));
+    row.append(h("button", { class: "danger small", onclick: guard(async () => {
+      if (!(await confirmDialog("Remove this browser's key? It will no longer be able to sign in. Keys on the controller are not touched.", "Remove"))) return;
+      await idb.del(); me = null; role = null; await refresh();
+    }) }, "Remove this browser's key"));
+    parts.push(row);
+  }
+  body.replaceChildren(...parts);
+}
+
+// ---- admin panels -----------------------------------------------------------------------------------------------
+const FIELDS = [
+  ["hold_ms", "Button hold (ms)", "How long a press is held."],
+  ["gap_ms", "Gap between presses (ms)", "Pause between repeated presses."],
+  ["temp_min_f", "Lowest temperature (°F)", "What the dial shows when pressed all the way down."],
+  ["temp_max_f", "Highest temperature (°F)", "What the dial shows when pressed all the way up."],
+  ["clamp_extra", "Extra down presses", "Added beyond the range to be sure of the lowest value."],
+  ["fan_steps", "Fan speeds", "Number of fan speeds on the car."],
+  ["fan_home_extra", "Extra fan down presses", "Added when homing to the lowest fan speed."],
+  ["seat_heater_stages", "Seat heater stages", "Presses before the heater loops back to off."],
+  ["rs_pulses", "Remote start pulses", "1 to 3. The module's setting decides (2 = double pulse)."],
+  ["rs_pulse_ms", "Remote start pulse (ms)", "Length of each trigger pulse."],
+  ["rs_gap_ms", "Remote start gap (ms)", "Pause between pulses."],
+  ["rs_confirm_ms", "Wait for engine (ms)", "How long to wait for the engine to report running."],
+];
+let currentSettings = {};
+
+async function loadInfo() {
+  const i = await api("GET", "/api/v1/admin/info");
+  const rows = [["Firmware", i.firmware + " (" + i.build + ")"], ["Running from", i.running_slot + " (next update goes to " + i.next_slot + ")"],
+    ["Uptime", Math.floor(i.uptime_s / 60) + " min"], ["Last restart", i.reset_reason], ["Free memory", Math.round(i.free_heap / 1024) + " KB (lowest " + Math.round(i.min_free_heap / 1024) + " KB)"],
+    ["Cellular", i.cellular ? "connected" : "down"], ["Tunnel", i.tunnel ? "up" : "down"], ["Keys", i.keys + " of 8"]];
+  $("#info").replaceChildren(...rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, String(v))]));
+  setRs(i.remote_start_enabled);
+  const copyRow = (label, value) => [h("dt", {}, label), h("dd", {}, h("span", { class: "mono" }, value), " ", copyButton(value, "Copy"))];
+  $("#ha-details").replaceChildren(...copyRow("Address", location.hostname), ...copyRow("Port", location.port || "443"),
+    ...copyRow("Certificate fingerprint (SHA-256)", i.cert_fingerprint));
+}
+
+async function loadKeys() {
+  const { keys } = await api("GET", "/api/v1/admin/keys");
+  $("#keys").replaceChildren(...keys.map((k) => {
+    const own = k.id === me.keyId;
+    const sel = h("select", { "aria-label": "Role of " + k.id, disabled: own }, ...["control", "admin"].map((r) => h("option", { value: r, selected: r === k.role }, r)));
+    sel.addEventListener("change", guard(async () => {
+      if (!(await confirmDialog("Change " + k.id + " to " + sel.value + "?", "Change"))) { sel.value = k.role; return; }
+      await api("POST", "/api/v1/admin/keys", { id: k.id, role: sel.value, public_key: k.public_key });
+      toast("Role changed"); await loadKeys();
+    }));
+    return h("tr", {}, h("td", {}, k.id + (own ? " (you)" : "")), h("td", {}, sel), h("td", { class: "mono" }, k.fingerprint),
+      h("td", { class: "actions" }, h("button", { class: "small danger", disabled: own, title: own ? "You cannot revoke the key you are signed in with" : "", onclick: guard(async () => {
+        if (!(await confirmDialog("Revoke key '" + k.id + "'? Anything using it stops working immediately.", "Revoke"))) return;
+        await api("DELETE", "/api/v1/admin/keys/" + encodeURIComponent(k.id));
+        toast("Key revoked"); await loadKeys(); await loadInfo();
+      }) }, "Revoke")));
+  }));
+}
+
+function renderSettings(s) {
+  currentSettings = s;
+  const form = $("#settings");
+  const grid = h("div", { class: "grid" });
+  for (const [key, label, help] of FIELDS) {
+    grid.append(h("div", {}, h("label", { for: "s-" + key }, label), h("input", { id: "s-" + key, type: "number", inputmode: "numeric", value: s[key], "aria-describedby": "d-" + key }), h("div", { id: "d-" + key, class: "muted" }, help)));
+  }
+  grid.append(h("div", {}, h("label", { for: "s-reset_on_engine_stop" }, "Reset heaters and defrost when the engine stops"),
+    h("select", { id: "s-reset_on_engine_stop" }, h("option", { value: "true", selected: s.reset_on_engine_stop }, "yes"), h("option", { value: "false", selected: !s.reset_on_engine_stop }, "no")),
+    h("div", { class: "muted" }, "The car turns them off itself; this keeps the tracked state honest.")));
+  form.replaceChildren(grid, h("div", { class: "row", style: "margin-top:12px" }, h("button", { class: "primary", type: "submit" }, "Save changes")));
+}
+
+function setRs(on) {
+  $("#rs-state").textContent = on ? "enabled" : "disabled";
+  const b = $("#rs-toggle");
+  b.textContent = on ? "Disable remote start" : "Enable remote start";
+  b.className = on ? "" : "primary";
+  b.dataset.on = on ? "1" : "0";
+}
+
+async function loadLog() {
+  const { entries } = await api("GET", "/api/v1/admin/log");
+  const when = (s) => (s < 120 ? s + " s ago" : s < 7200 ? Math.round(s / 60) + " min ago" : Math.round(s / 3600) + " h ago");
+  $("#log").replaceChildren(...(entries.length ? entries.map((e) => h("tr", {}, h("td", {}, when(e.age_s)), h("td", {}, e.key || "(none)"), h("td", { class: "mono" }, e.ip), h("td", {}, e.result))) : [h("tr", {}, h("td", { colspan: 4, class: "muted" }, "Nothing yet."))]));
+}
+
+
+// ---- firmware update -----------------------------------------------------------------------------------------------
+let fwFile = null;   // {bytes, sha256, version, project, size}
+
+function parseImage(bytes) {
+  // ESP image: byte 0 = 0xE9, then a 24-byte header, an 8-byte segment header, then esp_app_desc_t
+  // (magic 0xABCD5432 at offset 32, version at 48, project name at 80, both NUL-padded strings of 32 bytes).
+  const v = new DataView(bytes.buffer);
+  if (bytes.length < 256 || bytes[0] !== 0xe9 || v.getUint32(32, true) !== 0xabcd5432) return null;
+  const str = (o) => new TextDecoder().decode(bytes.slice(o, o + 32)).replace(/\0.*$/s, "");
+  return { version: str(48), project: str(80) };
+}
+
+$("#fw-file").addEventListener("change", guard(async () => {
+  const f = $("#fw-file").files[0];
+  fwFile = null;
+  $("#fw-upload").disabled = true;
+  $("#fw-meta").classList.add("hidden");
+  if (!f) return;
+  const bytes = new Uint8Array(await f.arrayBuffer());
+  const info = parseImage(bytes);
+  if (!info) { toast("That does not look like an ESP32 firmware image.", true); return; }
+  const sha = hex(await crypto.subtle.digest("SHA-256", bytes));
+  fwFile = { bytes, sha256: sha, version: info.version || "unknown", project: info.project, size: bytes.length };
+  $("#fw-meta").replaceChildren(...[["Version", fwFile.version], ["Project", fwFile.project], ["Size", Math.round(bytes.length / 1024) + " KB"],
+    ["SHA-256", sha.slice(0, 16) + "…"]].flatMap(([k, v]) => [h("dt", {}, k), h("dd", { class: k === "SHA-256" ? "mono" : "" }, v)]));
+  $("#fw-meta").classList.remove("hidden");
+  $("#fw-upload").disabled = false;
+}));
+
+function upload(token, bytes, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("PUT", "/api/v1/admin/firmware/" + token);
+    x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded, e.total);
+    x.onload = () => { let d = {}; try { d = JSON.parse(x.responseText); } catch {} x.status < 300 ? resolve(d) : reject(new ApiError(x.status, d.error || "error", d)); };
+    x.onerror = () => reject(new ApiError(0, "unreachable"));
+    x.send(bytes);
+  });
+}
+
+$("#fw-upload").addEventListener("click", guard(async () => {
+  if (!fwFile) return;
+  const slow = Math.round(fwFile.size / 10000 / 60);
+  if (!(await confirmDialog("Upload version " + fwFile.version + " (" + Math.round(fwFile.size / 1024) + " KB)? Over the cellular link this can take several minutes (about " + Math.max(slow, 1) + " min at 10 KB/s). The car keeps working until you restart.", "Upload"))) return;
+  const btn = $("#fw-upload"); btn.disabled = true;
+  $("#fw-progress").classList.remove("hidden");
+  const bar = $("#fw-bar"), status = $("#fw-status");
+  bar.value = 0; status.textContent = "Asking the controller…";
+  try {
+    const { upload_token } = await api("POST", "/api/v1/admin/firmware", { size: fwFile.size, sha256: fwFile.sha256, version: fwFile.version });
+    const t0 = performance.now();
+    status.textContent = "Uploading…";
+    await upload(upload_token, fwFile.bytes, (done, total) => {
+      bar.value = (done / total) * 100;
+      const rate = done / ((performance.now() - t0) / 1000);
+      status.textContent = Math.round(done / 1024) + " of " + Math.round(total / 1024) + " KB · " + (rate / 1024).toFixed(1) + " KB/s · about " + Math.max(1, Math.round((total - done) / rate)) + " s left";
+    });
+    bar.value = 100;
+    status.textContent = "Uploaded and verified. Restart to run it.";
+    $("#fw-reboot").classList.remove("hidden");
+    toast("Firmware verified and ready");
+  } catch (e) {
+    status.textContent = "Failed: " + explain(e);
+    toast(e instanceof ApiError && e.data && e.data.reason ? e.data.reason : explain(e), true);
+    btn.disabled = false;
+  }
+}));
+
+$("#fw-reboot").addEventListener("click", guard(async () => {
+  if (!(await confirmDialog("Restart now into the new firmware? The controller is offline for about a minute.", "Restart"))) return;
+  await api("POST", "/api/v1/admin/reboot", {});
+  $("#fw-reboot").classList.add("hidden");
+  $("#fw-status").textContent = "Restarting… waiting for the controller to come back.";
+  await new Promise((r) => setTimeout(r, 4000));
+  for (let i = 0; i < 90; i++) {
+    try { await plain("GET", "/api/v1/setup"); break; } catch { await new Promise((r) => setTimeout(r, 2000)); }
+  }
+  await refresh();
+  $("#fw-status").textContent = "Back online.";
+}));
+
+async function loadFirmware() {
+  const f = await api("GET", "/api/v1/admin/firmware");
+  $("#fw-probation").classList.toggle("hidden", !f.pending_verify);
+}
+
+async function loadAdmin() {
+  await loadInfo();
+  await loadKeys();
+  await loadLog();
+  await loadFirmware();
+  renderSettings(await api("GET", "/api/v1/admin/settings"));
+}
+
+// ---- wiring --------------------------------------------------------------------------------------------------------
+$("#addkey").addEventListener("submit", guard(async (ev) => {
+  ev.preventDefault();
+  await api("POST", "/api/v1/admin/keys", { id: $("#k-id").value.trim(), role: $("#k-role").value, public_key: $("#k-pub").value.replace(/\s+/g, "") });
+  toast("Key added");
+  $("#k-id").value = ""; $("#k-pub").value = "";
+  await loadKeys(); await loadInfo();
+}));
+
+$("#settings").addEventListener("submit", guard(async (ev) => {
+  ev.preventDefault();
+  const change = {};
+  for (const [key] of FIELDS) {
+    const v = parseInt($("#s-" + key).value, 10);
+    if (Number.isNaN(v)) { toast("Enter a whole number for " + key, true); return; }
+    if (v !== currentSettings[key]) change[key] = v;
+  }
+  const rst = $("#s-reset_on_engine_stop").value === "true";
+  if (rst !== currentSettings.reset_on_engine_stop) change.reset_on_engine_stop = rst;
+  if (!Object.keys(change).length) { toast("Nothing changed"); return; }
+  renderSettings(await api("POST", "/api/v1/admin/settings", change));
+  toast("Settings saved");
+}));
+
+$("#rs-toggle").addEventListener("click", guard(async () => {
+  const turnOn = $("#rs-toggle").dataset.on !== "1";
+  if (turnOn && !(await confirmDialog("Allow the network to start the engine? Anyone with a control key will be able to.", "Enable"))) return;
+  setRs((await api("POST", "/api/v1/admin/remote-start-enabled", { enabled: turnOn })).enabled);
+  toast("Remote start " + (turnOn ? "enabled" : "disabled"));
+}));
+
+$("#log-refresh").addEventListener("click", guard(loadLog));
+
+$("#reboot").addEventListener("click", guard(async () => {
+  if (!(await confirmDialog("Restart the controller now? It will be offline for about a minute while the modem reconnects.", "Restart"))) return;
+  await api("POST", "/api/v1/admin/reboot", {});
+  toast("Restarting…");
+}));
+
+async function refresh() {
+  try {
+    const s = await plain("GET", "/api/v1/setup");
+    setupOpen = s.setup_open;
+    $("#conn").textContent = "online · firmware " + s.firmware;
+    $("#conn").className = "chip ok";
+  } catch (e) {
+    $("#conn").textContent = "offline"; $("#conn").className = "chip bad";
+    showNotice("bad", "Cannot reach the controller. Is the car awake and the tunnel up?");
+    renderIdentity();
+    return;
+  }
+  role = null;
+  $("#admin").classList.add("hidden");
+  showNotice("", "");
+  if (setupOpen && !me) showNotice("warn", "This controller has no keys yet: the first browser to claim it becomes admin.");
+  renderIdentity();
+  if (!me) return;
+  try {
+    await loadAdmin();
+    role = "admin";
+    $("#admin").classList.remove("hidden");
+    renderIdentity();
+  } catch (e) {
+    if (e.status === 403) { role = "control"; showNotice("warn", "This key can control the car but not manage the controller."); }
+    else if (e.status === 401) showNotice("warn", setupOpen ? "This browser's key is not enrolled. You can enroll it as the first admin." : "This browser's key is not enrolled on the controller yet. Send its public key to an admin.");
+    else showNotice("bad", explain(e));
+    renderIdentity();
+  }
+}
+
+(async () => {
+  if (!window.crypto || !crypto.subtle || !window.indexedDB) {
+    showNotice("bad", "This browser cannot do the signing this page needs. Open it over https and accept the certificate warning (compare the fingerprint with the controller's boot log).");
+    return;
+  }
+  try { me = (await idb.get()) || null; } catch { me = null; }
+  await refresh();
+})();
+</script>
+</body>
+</html>

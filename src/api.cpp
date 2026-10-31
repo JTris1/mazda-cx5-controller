@@ -2,8 +2,10 @@
 #include <esp_http_server.h>
 #include <esp_https_server.h>
 #include <lwip/sockets.h>
+#include <mbedtls/base64.h>
 #include <string>
 #include "api.h"
+#include "api_internal.h"
 #include "actions.h"
 #include "auth.h"
 #include "config.h"
@@ -13,6 +15,7 @@
 #include "net_wg.h"
 #include "outputs.h"
 #include "remote_start.h"
+#include "vehicle_state.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -26,7 +29,6 @@
 #endif
 
 static constexpr uint16_t API_PORT = 443;
-static constexpr size_t MAX_BODY = 512;
 static constexpr uint32_t START_MAX_NONCE_AGE_MS = 15000;  // remote start needs a fresher challenge
 
 static httpd_handle_t server = nullptr;
@@ -52,7 +54,7 @@ static const char* statusText(int code) {
   }
 }
 
-static esp_err_t reply(httpd_req_t* req, int code, const JsonDocument& doc) {
+esp_err_t reply(httpd_req_t* req, int code, const JsonDocument& doc) {
   String out;
   serializeJson(doc, out);
   char status[40];
@@ -63,7 +65,7 @@ static esp_err_t reply(httpd_req_t* req, int code, const JsonDocument& doc) {
   return httpd_resp_send(req, out.c_str(), out.length());
 }
 
-static esp_err_t replyError(httpd_req_t* req, int code, const char* error) {
+esp_err_t replyError(httpd_req_t* req, int code, const char* error) {
   JsonDocument doc;
   doc["error"] = error;
   return reply(req, code, doc);
@@ -80,6 +82,7 @@ static esp_err_t replySubmit(httpd_req_t* req, Submit result, uint32_t id) {
     case Submit::BadArgs:    return replyError(req, 400, "invalid_arguments");
     case Submit::NoExpander: return replyError(req, 503, "expander_missing");
     case Submit::Busy:       return replyError(req, 503, "busy");
+    case Submit::Disabled:   return replyError(req, 503, "disabled");
   }
   return ESP_FAIL;
 }
@@ -89,6 +92,7 @@ static const char* methodName(int method) {
     case HTTP_GET:    return "GET";
     case HTTP_POST:   return "POST";
     case HTTP_DELETE: return "DELETE";
+    case HTTP_PUT:    return "PUT";
     default:          return "OTHER";
   }
 }
@@ -112,7 +116,7 @@ static bool v4Of(const sockaddr_storage& a, uint32_t& out) {
   return false;
 }
 
-static uint32_t clientIp(httpd_req_t* req) {
+uint32_t clientIp(httpd_req_t* req) {
   sockaddr_storage addr;
   socklen_t len = sizeof(addr);
   uint32_t v4 = 0;
@@ -122,7 +126,7 @@ static uint32_t clientIp(httpd_req_t* req) {
 
 // The server listens on every interface (the ESP-IDF server cannot bind to one address), so
 // each request checks that it arrived on the tunnel address and closes the connection otherwise.
-static bool arrivedOnTunnel(httpd_req_t* req) {
+bool arrivedOnTunnel(httpd_req_t* req) {
   uint32_t peer = clientIp(req);
   sockaddr_storage addr;
   socklen_t len = sizeof(addr);
@@ -144,16 +148,7 @@ static bool header(httpd_req_t* req, const char* name, char* out, size_t outLen)
 }
 
 // --- authentication ------------------------------------------------------------------
-struct Call {
-  AuthOutcome who;
-  char body[MAX_BODY + 1];
-  size_t bodyLen = 0;
-  char path[96];
-};
-
-// Reads the body, checks the signed headers and answers 4xx itself on failure (returns false).
-// Auth failures always get the same generic body, whatever went wrong.
-static bool authenticate(httpd_req_t* req, Role needed, Call& call) {
+bool readBody(httpd_req_t* req, Call& call) {
   size_t len = req->content_len;
   if (len > MAX_BODY) {
     replyError(req, 413, "body_too_large");
@@ -175,7 +170,13 @@ static bool authenticate(httpd_req_t* req, Role needed, Call& call) {
     return false;
   }
   strcpy(call.path, req->uri);
+  return true;
+}
 
+// Reads the body, checks the signed headers and answers 4xx itself on failure (returns false).
+// Auth failures always get the same generic body, whatever went wrong.
+bool authenticate(httpd_req_t* req, Role needed, Call& call) {
+  if (!readBody(req, call)) return false;
   char key[24], nonce[40], sig[100];
   bool haveHeaders = header(req, "X-CX5-Key", key, sizeof(key)) && header(req, "X-CX5-Nonce", nonce, sizeof(nonce)) &&
                      header(req, "X-CX5-Signature", sig, sizeof(sig));
@@ -193,7 +194,7 @@ static bool authenticate(httpd_req_t* req, Role needed, Call& call) {
   }
 }
 
-static bool parseBody(const Call& call, JsonDocument& doc) {
+bool parseBody(const Call& call, JsonDocument& doc) {
   return call.bodyLen > 0 && deserializeJson(doc, call.body, call.bodyLen) == DeserializationError::Ok;
 }
 
@@ -274,20 +275,24 @@ static esp_err_t handleTemperature(httpd_req_t* req) {
   return replySubmit(req, actionSetTemperature(doc["value"].as<int>(), &id), id);
 }
 
-// POST /api/v1/fan  {"action":"up|down","steps":1..}   (steps defaults to 1)
+// POST /api/v1/fan  {"level": 1..fanSteps}   absolute (the device homes to the lowest speed, then counts up)
+//               or  {"action":"up|down","steps":1..}   relative (steps defaults to 1)
 static esp_err_t handleFan(httpd_req_t* req) {
   if (!arrivedOnTunnel(req)) return ESP_FAIL;
   Call call;
   if (!authenticate(req, Role::Control, call)) return ESP_OK;
   JsonDocument doc;
   if (!parseBody(call, doc)) return replyError(req, 400, "invalid_json");
+  uint32_t id = 0;
+  if (doc["level"].is<int>()) {
+    return replySubmit(req, actionSetFan(doc["level"].as<int>(), &id), id);
+  }
   const char* action = doc["action"] | "";
   bool up;
   if (strcmp(action, "up") == 0) up = true;
   else if (strcmp(action, "down") == 0) up = false;
   else return replyError(req, 400, "invalid_arguments");
   int steps = doc["steps"] | 1;
-  uint32_t id = 0;
   return replySubmit(req, actionFanStep(up, steps, &id), id);
 }
 
@@ -311,6 +316,7 @@ static esp_err_t handleRemoteStart(httpd_req_t* req) {
   const char* reason = "";
   if (!remoteStartPolicyAllow(&reason)) {
     Logf(WARN, "API: remote start refused: %s", reason);
+    remoteStartNoteRefused(reason);
     JsonDocument doc;
     doc["error"] = "refused";
     doc["reason"] = reason;
@@ -321,19 +327,128 @@ static esp_err_t handleRemoteStart(httpd_req_t* req) {
   return replySubmit(req, actionRemoteStart(&id), id);
 }
 
+static const char* heaterName(int level) {
+  static const char* names[] = {"off", "high", "medium", "low"};
+  return names[level & 3];
+}
+
 // GET /api/v1/state
 static esp_err_t handleState(httpd_req_t* req) {
   if (!arrivedOnTunnel(req)) return ESP_FAIL;
   Call call;
   if (!authenticate(req, Role::Control, call)) return ESP_OK;
   JsonDocument doc;
-  doc["engine_running"] = (bool)engineRunning;
-  doc["expander_ok"] = expanderOk;
-  doc["remote_start_enabled"] = remoteStartEnabled();
+  doc["firmware"] = FIRMWARE_VERSION;
   doc["uptime_s"] = millis() / 1000;
   doc["cellular"] = cellConnected();
-  doc["firmware"] = FIRMWARE_VERSION;
+  doc["tunnel"] = wgStarted();
+  doc["expander_ok"] = expanderOk;
+  doc["engine_running"] = (bool)engineRunning;
+  doc["engine_age_s"] = (millis() - engineChangedAt) / 1000;
+
+  RemoteStartInfo rs;
+  remoteStartInfo(rs);
+  JsonObject r = doc["remote_start"].to<JsonObject>();
+  r["enabled"] = remoteStartEnabled();
+  r["state"] = remoteStartStateName(rs.state);
+  r["detail"] = rs.detail;
+  r["age_s"] = rs.state == RemoteStartState::Idle ? 0 : (millis() - rs.sinceMs) / 1000;
+
+  uint32_t running = 0;
+  int queued = 0;
+  actionsBusyInfo(running, queued);
+  JsonObject busy = doc["busy"].to<JsonObject>();
+  if (running) busy["running"] = running; else busy["running"] = nullptr;
+  busy["queued"] = queued;
+
+  VehicleSnapshot v = vstateGet();
+  JsonObject c = doc["climate"].to<JsonObject>();
+  c["tracked"] = true;   // everything below is the last commanded state, not a reading from the car
+  if (v.tempF >= 0) c["temperature_f"] = v.tempF; else c["temperature_f"] = nullptr;
+  JsonObject h = c["heater"].to<JsonObject>();
+  h["driver"] = heaterName(v.heater[SEAT_DRIVER]);
+  h["passenger"] = heaterName(v.heater[SEAT_PASSENGER]);
+  JsonObject d = c["defrost"].to<JsonObject>();
+  d["front"] = v.defrost[DEFROST_FRONT];
+  d["rear"] = v.defrost[DEFROST_REAR];
+  if (v.fan >= 1) c["fan"] = v.fan; else c["fan"] = nullptr;
+
+  JsonObject lim = doc["limits"].to<JsonObject>();
+  lim["temp_min_f"] = cfg.tempMinF;
+  lim["temp_max_f"] = cfg.tempMaxF;
+  lim["fan_steps"] = cfg.fanSteps;
   return reply(req, 200, doc);
+}
+
+// POST /api/v1/assume  {"temperature":72, "heater":{"driver":"off","passenger":"low"},
+//                       "defrost":{"front":false,"rear":true}, "fan":3}
+// Tells the device what the controls really are, without pressing anything. Every key is optional;
+// null for temperature or fan means "unknown".
+static int heaterLevel(const char* name) {
+  if (strcmp(name, "off") == 0) return 0;
+  if (strcmp(name, "high") == 0) return 1;
+  if (strcmp(name, "medium") == 0) return 2;
+  if (strcmp(name, "low") == 0) return 3;
+  return -1;
+}
+
+static esp_err_t handleAssume(httpd_req_t* req) {
+  if (!arrivedOnTunnel(req)) return ESP_FAIL;
+  Call call;
+  if (!authenticate(req, Role::Control, call)) return ESP_OK;
+  JsonDocument doc;
+  if (!parseBody(call, doc)) return replyError(req, 400, "invalid_json");
+
+  VehicleSnapshot v;
+  uint8_t fields = 0;
+  if (doc["temperature"].is<JsonVariantConst>()) {
+    if (doc["temperature"].isNull()) {
+      v.tempF = -1;
+    } else if (doc["temperature"].is<int>() && doc["temperature"].as<int>() >= cfg.tempMinF &&
+               doc["temperature"].as<int>() <= cfg.tempMaxF) {
+      v.tempF = doc["temperature"].as<int>();
+    } else {
+      return replyError(req, 400, "invalid_arguments");
+    }
+    fields |= VS_TEMP;
+  }
+  if (doc["fan"].is<JsonVariantConst>()) {
+    if (doc["fan"].isNull()) {
+      v.fan = -1;
+    } else if (doc["fan"].is<int>() && doc["fan"].as<int>() >= 1 && doc["fan"].as<int>() <= cfg.fanSteps) {
+      v.fan = doc["fan"].as<int>();
+    } else {
+      return replyError(req, 400, "invalid_arguments");
+    }
+    fields |= VS_FAN;
+  }
+  if (doc["heater"]["driver"].is<const char*>()) {
+    int l = heaterLevel(doc["heater"]["driver"]);
+    if (l < 0) return replyError(req, 400, "invalid_arguments");
+    v.heater[SEAT_DRIVER] = l;
+    fields |= VS_HEATER_DRIVER;
+  }
+  if (doc["heater"]["passenger"].is<const char*>()) {
+    int l = heaterLevel(doc["heater"]["passenger"]);
+    if (l < 0) return replyError(req, 400, "invalid_arguments");
+    v.heater[SEAT_PASSENGER] = l;
+    fields |= VS_HEATER_PASSENGER;
+  }
+  if (doc["defrost"]["front"].is<bool>()) {
+    v.defrost[DEFROST_FRONT] = doc["defrost"]["front"].as<bool>();
+    fields |= VS_DEFROST_FRONT;
+  }
+  if (doc["defrost"]["rear"].is<bool>()) {
+    v.defrost[DEFROST_REAR] = doc["defrost"]["rear"].as<bool>();
+    fields |= VS_DEFROST_REAR;
+  }
+  if (fields == 0) return replyError(req, 400, "nothing_to_assume");
+
+  vstateAssume(v, fields);
+  Logf(INFO, "API: tracked state corrected by '%s' (fields 0x%02X)", call.who.keyId, fields);
+  JsonDocument out;
+  out["assumed"] = true;
+  return reply(req, 200, out);
 }
 
 // GET /api/v1/jobs/<id>
@@ -372,6 +487,9 @@ static esp_err_t handleKeysList(httpd_req_t* req) {
     o["id"] = k.id;
     o["role"] = roleName(k.role);
     o["fingerprint"] = fp;
+    char b64[100];
+    size_t n = 0;
+    if (mbedtls_base64_encode((unsigned char*)b64, sizeof(b64), &n, k.pub, 65) == 0) o["public_key"] = b64;   // public, so the admin page can change a role by re-adding
   }
   return reply(req, 200, doc);
 }
@@ -392,6 +510,7 @@ static esp_err_t handleKeysAdd(httpd_req_t* req) {
   else return replyError(req, 400, "invalid_arguments");
   uint8_t pub[65];
   if (!authParsePublicKey(pubText, pub)) return replyError(req, 400, "invalid_public_key");
+  if (strcmp(id, call.who.keyId) == 0 && role != call.who.role) return replyError(req, 409, "cannot_change_own_role");
   switch (authKeyAdd(id, role, pub)) {
     case KeyAdd::Ok: {
       Logf(INFO, "API: key '%s' enrolled as %s by '%s'", id, roleText, call.who.keyId);
@@ -420,7 +539,7 @@ static esp_err_t handleKeysDelete(httpd_req_t* req) {
 }
 
 // --- server lifecycle -----------------------------------------------------------------
-static void add(const char* uri, httpd_method_t method, esp_err_t (*handler)(httpd_req_t*)) {
+void apiAddHandler(const char* uri, httpd_method_t method, esp_err_t (*handler)(httpd_req_t*)) {
   httpd_uri_t u = {};
   u.uri = uri;
   u.method = method;
@@ -443,7 +562,7 @@ static bool startServer() {
   conf.prvtkey_len = sizeof(TLS_KEY_DER);
   conf.port_secure = API_PORT;
   conf.httpd.max_open_sockets = 2;
-  conf.httpd.max_uri_handlers = 16;
+  conf.httpd.max_uri_handlers = 32;
   conf.httpd.uri_match_fn = httpd_uri_match_wildcard;
   conf.httpd.lru_purge_enable = true;
   conf.httpd.stack_size = 12288;
@@ -453,18 +572,20 @@ static bool startServer() {
     server = nullptr;
     return false;
   }
-  add("/api/v1/challenge", HTTP_GET, handleChallenge);
-  add("/api/v1/heater", HTTP_POST, handleHeater);
-  add("/api/v1/defrost", HTTP_POST, handleDefrost);
-  add("/api/v1/temperature", HTTP_POST, handleTemperature);
-  add("/api/v1/fan", HTTP_POST, handleFan);
-  add("/api/v1/power", HTTP_POST, handlePower);
-  add("/api/v1/remote-start", HTTP_POST, handleRemoteStart);
-  add("/api/v1/state", HTTP_GET, handleState);
-  add("/api/v1/jobs/*", HTTP_GET, handleJob);
-  add("/api/v1/admin/keys", HTTP_GET, handleKeysList);
-  add("/api/v1/admin/keys", HTTP_POST, handleKeysAdd);
-  add("/api/v1/admin/keys/*", HTTP_DELETE, handleKeysDelete);
+  apiAddHandler("/api/v1/challenge", HTTP_GET, handleChallenge);
+  apiAddHandler("/api/v1/heater", HTTP_POST, handleHeater);
+  apiAddHandler("/api/v1/defrost", HTTP_POST, handleDefrost);
+  apiAddHandler("/api/v1/temperature", HTTP_POST, handleTemperature);
+  apiAddHandler("/api/v1/fan", HTTP_POST, handleFan);
+  apiAddHandler("/api/v1/assume", HTTP_POST, handleAssume);
+  apiAddHandler("/api/v1/power", HTTP_POST, handlePower);
+  apiAddHandler("/api/v1/remote-start", HTTP_POST, handleRemoteStart);
+  apiAddHandler("/api/v1/state", HTTP_GET, handleState);
+  apiAddHandler("/api/v1/jobs/*", HTTP_GET, handleJob);
+  apiAddHandler("/api/v1/admin/keys", HTTP_GET, handleKeysList);
+  apiAddHandler("/api/v1/admin/keys", HTTP_POST, handleKeysAdd);
+  apiAddHandler("/api/v1/admin/keys/*", HTTP_DELETE, handleKeysDelete);
+  adminRegister();
   httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, handleNotFound);
 
   Logf(INFO, "API: listening on https://%s:%u/ (certificate fingerprint %s)", WG_LOCAL_IP, API_PORT, TLS_CERT_FINGERPRINT);
@@ -478,6 +599,7 @@ static void stopServer() {
 }
 
 void apiPoll() {
+  adminPoll();
   bool want = wgStarted();
   if (want && !running && (int32_t)(millis() - nextStartTry) >= 0) {
     running = startServer();
@@ -486,6 +608,10 @@ void apiPoll() {
     stopServer();
     running = false;
   }
+}
+
+const char* apiCertFingerprint() {
+  return TLS_CERT_FINGERPRINT;
 }
 
 bool apiRunning() {

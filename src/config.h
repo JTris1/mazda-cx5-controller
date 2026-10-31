@@ -33,11 +33,15 @@ constexpr uint8_t DRIVER_SEAT_HEATER_PIN = 6;     // GPA6
 constexpr uint8_t PASSENGER_SEAT_HEATER_PIN = 5;  // GPA5
 constexpr uint8_t FRONT_DEFROST_PIN = 4;          // GPA4
 constexpr uint8_t CLIMATE_POWER_PIN = 0;          // GPA0
+// The climate power button channel is switched off for now (its panel line misbehaved when connected).
+// With this false the pin is never driven (it stays a high-impedance input held low by its pull-down),
+// and the console, the API and the bench command all refuse to press it. Set true to re-enable.
+constexpr bool CLIMATE_POWER_ENABLED = false;
 constexpr uint8_t REAR_DEFROST_PIN = 3;           // GPA3
 constexpr uint8_t FAN_UP_PIN = 2;                // GPA2
 constexpr uint8_t FAN_DOWN_PIN = 1;              // GPA1
 
-constexpr char FIRMWARE_VERSION[] = "0.1.0";
+constexpr char FIRMWARE_VERSION[] = "0.2.0";
 
 // --- Limits -----------------------------------------------------------------
 constexpr uint32_t HOLD_MS_MAX = 500;  // fail-safe: an output is never held longer
@@ -45,7 +49,7 @@ constexpr uint32_t RS_PULSE_MS_MAX = 2000;
 constexpr uint32_t ENGINE_DEBOUNCE_MS = 200;  // engine input must be stable this long to count
 constexpr uint32_t BENCH_MAX_S = 30;
 constexpr int STEPS_MAX = 50;       // temperature button repeat limit
-constexpr int FAN_STEPS_MAX = 50;   // TODO: the car has only 6 or 7 fan speeds; set the real number
+constexpr int FAN_STEPS_LIMIT = 12;  // upper bound for the fanSteps setting
 
 // --- Runtime settings (changeable from the serial console) ------------------
 struct Settings {
@@ -58,6 +62,9 @@ struct Settings {
   uint32_t rsGapMs = 300;     // gap between pulses when sending more than one
   int rsPulses = 2;           // 2 = the module's "double pulse" setting (1-3)
   uint32_t rsConfirmMs = 20000;  // how long to wait for the engine to report running
+  int fanSteps = 7;           // number of fan speeds on the car (levels 1..fanSteps)
+  int fanHomeExtra = 1;       // extra down presses beyond fanSteps-1, to be sure of the lowest speed
+  bool resetOnEngineStop = true;  // assume seat heaters and defrost are off once the engine stops
   int seatHeaterStages = 3;   // number of stages on the seat heater button (ex: 3 means the button can be pressed 3 times before looping around to 0)
 };
 extern Settings cfg;

@@ -1,0 +1,49 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to the CX-5 controller",
+        "description": "Use the controller's address on the WireGuard tunnel. Use a key with the \"control\" role, not an admin key: Home Assistant stores it unencrypted.",
+        "data": {
+          "host": "Tunnel address",
+          "port": "Port",
+          "fingerprint": "Certificate fingerprint (SHA-256)",
+          "key_id": "Key id",
+          "private_key": "Private key (PEM), leave empty to create one"
+        }
+      },
+      "enroll": {
+        "title": "Enroll this key on the controller",
+        "description": "Home Assistant created a key. On the controller's admin page, under \"Add a key\", enter id **{key_id}**, role **control**, and this public key, then press Submit here:\n\n`{public_key}`"
+      },
+      "reauth_confirm": {
+        "title": "Sign in again",
+        "description": "The controller rejected the saved key. Enter a current key.",
+        "data": {
+          "fingerprint": "Certificate fingerprint (SHA-256)",
+          "key_id": "Key id",
+          "private_key": "Private key (PEM)"
+        }
+      }
+    },
+    "error": {
+      "invalid_fingerprint": "That is not a SHA-256 fingerprint (64 hex characters, colons allowed).",
+      "invalid_key": "That is not a valid P-256 private key in PEM format.",
+      "cannot_connect": "Could not reach the controller. Is the tunnel up, and is the car awake?",
+      "pin_mismatch": "The controller's certificate does not match that fingerprint.",
+      "invalid_auth": "The controller does not accept that key.",
+      "not_enrolled": "The controller does not know this key yet. Add it on the admin page, then submit again.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "That controller is already set up.",
+      "reauth_successful": "The new key was saved."
+    }
+  },
+  "services": {
+    "resync": {
+      "name": "Resync tracked state",
+      "description": "Tell the controller what the car really shows, without pressing anything."
+    }
+  }
+}

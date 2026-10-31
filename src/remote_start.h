@@ -11,6 +11,17 @@ void setRemoteStartEnabled(bool on);
 // True if a network-requested start may go ahead (and records it). Otherwise *reason says why.
 bool remoteStartPolicyAllow(const char** reason);
 
+// What the last remote start request did, for the dashboard (reported by the API's state call).
+enum class RemoteStartState : uint8_t { Idle, Starting, Confirmed, Failed, Refused };
+struct RemoteStartInfo {
+  RemoteStartState state;
+  char detail[48];      // short reason or result, e.g. "confirmed after 3010 ms", "not confirmed"
+  uint32_t sinceMs;     // millis() when state last changed
+};
+void remoteStartInfo(RemoteStartInfo& out);
+const char* remoteStartStateName(RemoteStartState s);
+void remoteStartNoteRefused(const char* reason);   // the API calls this when the policy says no
+
 // Pulses the module's trigger input, then waits for the engine input to confirm.
 // Returns true only once the engine reads running (or if it was already running).
 bool sendRemoteStart();

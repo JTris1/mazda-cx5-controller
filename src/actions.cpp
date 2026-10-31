@@ -2,13 +2,14 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include "actions.h"
+#include "ota.h"
 #include "config.h"
 #include "engine.h"
 #include "log.h"
 #include "outputs.h"
 #include "remote_start.h"
 
-enum class ActionType : uint8_t { TempStep, SetTemperature, SetHeater, SetDefrost, FanStep, Power, RemoteStart };
+enum class ActionType : uint8_t { TempStep, SetTemperature, SetHeater, SetDefrost, FanStep, SetFan, Power, RemoteStart };
 
 struct Job {
   uint32_t id;
@@ -25,6 +26,7 @@ static SemaphoreHandle_t outputsMutex = nullptr;  // held while a job runs or a 
 static SemaphoreHandle_t jobsMutex = nullptr;     // protects the history ring and the id counter
 static JobInfo history[HISTORY];
 static uint32_t nextId = 1;
+static volatile uint32_t runningJobId = 0;
 
 // --- job history ----------------------------------------------------------------------
 static uint32_t recordNew() {
@@ -76,17 +78,40 @@ bool actionsWait(uint32_t id, uint32_t timeoutMs, JobInfo& out) {
 // --- worker --------------------------------------------------------------------------
 static void runJob(const Job& job) {
   bool ok = true;
-  const char* message = "done";
+  char message[48] = "done";
   switch (job.type) {
-    case ActionType::TempStep:       climateTempStep(job.a != 0, job.b); break;
-    case ActionType::SetTemperature: climateSetTemperature(job.a); break;
-    case ActionType::SetHeater:      climateSetHeater(job.a == 0 ? SEAT_DRIVER : SEAT_PASSENGER, job.b); break;
-    case ActionType::SetDefrost:     climateSetDefrost(job.a == 0 ? DEFROST_FRONT : DEFROST_REAR, job.b != 0); break;
-    case ActionType::FanStep:        climateFanStep(job.a != 0, job.b); break;
-    case ActionType::Power:          climatePowerPress(); break;
+    case ActionType::TempStep:
+      climateTempStep(job.a != 0, job.b);
+      snprintf(message, sizeof(message), "temperature %s %d", job.a ? "up" : "down", job.b);
+      break;
+    case ActionType::SetTemperature:
+      climateSetTemperature(job.a);
+      snprintf(message, sizeof(message), "temperature set to %d F", job.a);
+      break;
+    case ActionType::SetHeater: {
+      static const char* names[] = {"off", "high", "medium", "low"};
+      climateSetHeater(job.a == 0 ? SEAT_DRIVER : SEAT_PASSENGER, job.b);
+      snprintf(message, sizeof(message), "%s heater %s", job.a == 0 ? "driver" : "passenger", names[job.b & 3]);
+      break;
+    }
+    case ActionType::SetDefrost:
+      climateSetDefrost(job.a == 0 ? DEFROST_FRONT : DEFROST_REAR, job.b != 0);
+      snprintf(message, sizeof(message), "%s defrost %s", job.a == 0 ? "front" : "rear", job.b ? "on" : "off");
+      break;
+    case ActionType::FanStep:
+      climateFanStep(job.a != 0, job.b);
+      snprintf(message, sizeof(message), "fan %s %d", job.a ? "up" : "down", job.b);
+      break;
+    case ActionType::SetFan:
+      climateSetFan(job.a);
+      snprintf(message, sizeof(message), "fan set to %d", job.a);
+      break;
+    case ActionType::Power:
+      climatePowerPress();
+      break;
     case ActionType::RemoteStart:
       ok = sendRemoteStart();
-      message = ok ? "confirmed" : "not confirmed";
+      strcpy(message, ok ? "confirmed" : "not confirmed");
       break;
   }
   setState(job.id, JobState::Done, ok, message);
@@ -97,8 +122,10 @@ static void workerTask(void*) {
   for (;;) {
     if (xQueueReceive(queue, &job, portMAX_DELAY) != pdTRUE) continue;
     xSemaphoreTake(outputsMutex, portMAX_DELAY);
+    runningJobId = job.id;
     setState(job.id, JobState::Running);
     runJob(job);
+    runningJobId = 0;
     xSemaphoreGive(outputsMutex);
   }
 }
@@ -121,6 +148,7 @@ void actionsUnlock() {
 
 // --- submit ---------------------------------------------------------------------------
 static Submit submit(ActionType type, int a, int b, uint32_t* idOut) {
+  if (otaReceiving()) return Submit::Busy;   // nothing may move while firmware is being written
   uint32_t id = recordNew();
   Job job{id, type, a, b};
   if (xQueueSend(queue, &job, 0) != pdTRUE) {
@@ -160,11 +188,23 @@ Submit actionSetDefrost(DefrostZone zone, bool on, uint32_t* id) {
 
 Submit actionFanStep(bool up, int n, uint32_t* id) {
   if (!expanderOk) return Submit::NoExpander;
-  if (!validSteps(n, FAN_STEPS_MAX)) return Submit::BadArgs;
+  if (!validSteps(n, cfg.fanSteps)) return Submit::BadArgs;
   return submit(ActionType::FanStep, up ? 1 : 0, n, id);
 }
 
+Submit actionSetFan(int level, uint32_t* id) {
+  if (!expanderOk) return Submit::NoExpander;
+  if (level < 1 || level > cfg.fanSteps) return Submit::BadArgs;
+  return submit(ActionType::SetFan, level, 0, id);
+}
+
+void actionsBusyInfo(uint32_t& runningId, int& queued) {
+  runningId = runningJobId;
+  queued = queue ? (int)uxQueueMessagesWaiting(queue) : 0;
+}
+
 Submit actionPower(uint32_t* id) {
+  if (!CLIMATE_POWER_ENABLED) return Submit::Disabled;
   if (!expanderOk) return Submit::NoExpander;
   return submit(ActionType::Power, 0, 0, id);
 }
@@ -179,6 +219,7 @@ const char* submitText(Submit s) {
     case Submit::BadArgs:    return "invalid arguments";
     case Submit::NoExpander: return "Expander is missing. Refused";
     case Submit::Busy:       return "busy, try again";
+    case Submit::Disabled:   return "that control is disabled (see config.h)";
   }
   return "unknown";
 }

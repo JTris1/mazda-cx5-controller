@@ -12,6 +12,40 @@ void remoteStartBegin() {
   digitalWrite(RS_TRIGGER_PIN, LOW);
 }
 
+// --- status of the last request (for the dashboard) ---------------------------------------
+static RemoteStartInfo lastInfo = {RemoteStartState::Idle, "", 0};
+static portMUX_TYPE infoLock = portMUX_INITIALIZER_UNLOCKED;
+
+static void setInfo(RemoteStartState s, const char* detail) {
+  portENTER_CRITICAL(&infoLock);
+  lastInfo.state = s;
+  strncpy(lastInfo.detail, detail, sizeof(lastInfo.detail) - 1);
+  lastInfo.detail[sizeof(lastInfo.detail) - 1] = '\0';
+  lastInfo.sinceMs = millis();
+  portEXIT_CRITICAL(&infoLock);
+}
+
+void remoteStartInfo(RemoteStartInfo& out) {
+  portENTER_CRITICAL(&infoLock);
+  out = lastInfo;
+  portEXIT_CRITICAL(&infoLock);
+}
+
+const char* remoteStartStateName(RemoteStartState s) {
+  switch (s) {
+    case RemoteStartState::Idle:      return "idle";
+    case RemoteStartState::Starting:  return "starting";
+    case RemoteStartState::Confirmed: return "confirmed";
+    case RemoteStartState::Failed:    return "failed";
+    case RemoteStartState::Refused:   return "refused";
+  }
+  return "idle";
+}
+
+void remoteStartNoteRefused(const char* reason) {
+  setInfo(RemoteStartState::Refused, reason);
+}
+
 // --- policy for network-requested starts -----------------------------------------------
 static constexpr uint32_t COOLDOWN_MS = 60UL * 1000;
 static constexpr uint32_t HOUR_MS = 3600UL * 1000;
@@ -75,8 +109,10 @@ bool sendRemoteStart() {
   // The module may treat another pulse as a stop request, so never pulse a running engine.
   if (engineRunning) {
     Log(WARN, "Engine is already running, not sending a start pulse");
+    setInfo(RemoteStartState::Confirmed, "engine was already running");
     return true;
   }
+  setInfo(RemoteStartState::Starting, "trigger being sent");
 
   Logf(INFO, "Remote start: %d pulse(s), %lu ms on, %lu ms gap", cfg.rsPulses,
        (unsigned long)cfg.rsPulseMs, (unsigned long)cfg.rsGapMs);
@@ -94,11 +130,15 @@ bool sendRemoteStart() {
   while (millis() - startedAt < cfg.rsConfirmMs) {
     if (engineRunning) {  // kept current by the engine task
       Logf(INFO, "Remote start CONFIRMED after %lu ms", (unsigned long)(millis() - startedAt));
+      char detail[48];
+      snprintf(detail, sizeof(detail), "confirmed after %lu ms", (unsigned long)(millis() - startedAt));
+      setInfo(RemoteStartState::Confirmed, detail);
       return true;
     }
     delay(10);
   }
   Logf(ERROR, "Remote start NOT confirmed within %lu s. Check the module's parking-light error code.",
        (unsigned long)(cfg.rsConfirmMs / 1000));
+  setInfo(RemoteStartState::Failed, "engine did not report running");
   return false;
 }

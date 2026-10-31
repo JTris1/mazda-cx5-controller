@@ -11,6 +11,7 @@
 #include "net_cell.h"
 #include "outputs.h"
 #include "remote_start.h"
+#include "settings.h"
 #include "util.h"
 
 // --- Shared helpers ---------------------------------------------------------------
@@ -54,6 +55,7 @@ static void cmdHold(int argc, char** argv) {
     return;
   }
   cfg.holdMs = v;
+  settingsSave();
   Logf(INFO, "hold = %ld ms", v);
 }
 
@@ -64,6 +66,7 @@ static void cmdGap(int argc, char** argv) {
     return;
   }
   cfg.gapMs = v;
+  settingsSave();
   Logf(INFO, "gap = %ld ms", v);
 }
 
@@ -75,6 +78,7 @@ static void cmdRange(int argc, char** argv) {
   }
   cfg.tempMinF = lo;
   cfg.tempMaxF = hi;
+  settingsSave();
   Logf(INFO, "temp range = %ld-%ld F", lo, hi);
 }
 
@@ -85,6 +89,7 @@ static void cmdClamp(int argc, char** argv) {
     return;
   }
   cfg.clampExtra = v;
+  settingsSave();
   Logf(INFO, "clampExtra = %ld", v);
 }
 
@@ -165,6 +170,46 @@ static void cmdFan(int argc, char** argv) {
   finish(actionFanStep(up, n, &id), id);
 }
 
+// fanset <level>: absolute fan speed
+static void cmdFanSet(int argc, char** argv) {
+  long level;
+  if (argc < 2 || !parseInt(argv[1], level) || level < 1 || level > cfg.fanSteps) {
+    Logf(WARN, "Usage: fanset <1-%d>", cfg.fanSteps);
+    return;
+  }
+  uint32_t id;
+  finish(actionSetFan((int)level, &id), id);
+}
+
+// fancfg <speeds> <extra>: how many fan speeds the car has, and extra down presses when homing
+static void cmdFanCfg(int argc, char** argv) {
+  long steps, extra;
+  if (argc < 3 || !parseInt(argv[1], steps) || !parseInt(argv[2], extra) || steps < 2 || steps > FAN_STEPS_LIMIT ||
+      extra < 0 || extra > 5) {
+    Logf(WARN, "Usage: fancfg <speeds 2-%d> <extra down presses 0-5>", FAN_STEPS_LIMIT);
+    return;
+  }
+  cfg.fanSteps = steps;
+  cfg.fanHomeExtra = extra;
+  settingsSave();
+  Logf(INFO, "fan: %ld speeds, %ld extra down presses when homing", steps, extra);
+}
+
+// autoreset <on|off>: assume heaters and defrost are off when the engine stops
+static void cmdAutoReset(int argc, char** argv) {
+  if (argc < 2 || (strcasecmp(argv[1], "on") != 0 && strcasecmp(argv[1], "off") != 0)) {
+    Logf(WARN, "Usage: autoreset <on|off>   (now %s)", cfg.resetOnEngineStop ? "on" : "off");
+    return;
+  }
+  cfg.resetOnEngineStop = strcasecmp(argv[1], "on") == 0;
+  settingsSave();
+  Logf(INFO, "Reset tracked heater/defrost state when the engine stops: %s", cfg.resetOnEngineStop ? "on" : "off");
+}
+
+static void cmdSettings(int argc, char** argv) {
+  settingsPrint();
+}
+
 static void cmdPower(int argc, char** argv) {
   if (!requireExpander()) return;
   uint32_t id;
@@ -185,6 +230,7 @@ static void cmdRsWait(int argc, char** argv) {
     return;
   }
   cfg.rsConfirmMs = (uint32_t)v * 1000;
+  settingsSave();
   Logf(INFO, "Remote start confirm wait = %ld s", v);
 }
 
@@ -199,6 +245,7 @@ static void cmdRsCfg(int argc, char** argv) {
   cfg.rsPulseMs = pulse;
   cfg.rsGapMs = gap;
   cfg.rsPulses = count;
+  settingsSave();
   Logf(INFO, "Remote start: %ld pulse(s), %ld ms on, %ld ms gap", count, pulse, gap);
 }
 
@@ -215,6 +262,10 @@ static void cmdNet(int argc, char** argv) {
 
 // wg           show tunnel status
 // wg restart   stop the tunnel and let it start again (a new handshake attempt)
+static void cmdI2c(int argc, char** argv) {
+  outputsPrintStatus();
+}
+
 static void cmdApi(int argc, char** argv) {
   apiPrintStatus();
 }
@@ -336,8 +387,43 @@ static const BenchOutput benchOutputs[] = {
   {"power", CLIMATE_POWER_PIN},
 };
 
+// bench start <seconds> confirm
+// Holds the remote-start trigger output ON for a few seconds so it can be measured. Unlike the
+// climate buttons this wire goes to the iDatastart module, and pulling it to ground is what starts
+// the engine, so it is capped at 10 s and needs the word "confirm" as a deliberate second step.
+static void benchStart(int argc, char** argv) {
+  long seconds;
+  if (argc < 3 || !parseInt(argv[2], seconds) || seconds < 1 || seconds > 10) {
+    Log(WARN, "Usage: bench start <1-10 s> confirm");
+    return;
+  }
+  if (argc < 4 || strcasecmp(argv[3], "confirm") != 0) {
+    Log(WARN, "This pulls the start-trigger output to ground. DISCONNECT the wire from the module (M3-06) first,");
+    Log(WARN, "then repeat: bench start <seconds> confirm");
+    return;
+  }
+  if (!actionsLock(2000)) {
+    Log(WARN, "Busy: an action is still running, try again");
+    return;
+  }
+  Logf(INFO, "Bench: start trigger ON (GPIO %d HIGH) for %ld s. Measure now. Press any key to stop early.", RS_TRIGGER_PIN, seconds);
+  delay(50);
+  while (Serial.available()) Serial.read();
+  digitalWrite(RS_TRIGGER_PIN, HIGH);
+  uint32_t end = millis() + (uint32_t)seconds * 1000;
+  while (millis() < end && !Serial.available()) delay(10);
+  digitalWrite(RS_TRIGGER_PIN, LOW);
+  actionsUnlock();
+  while (Serial.available()) Serial.read();
+  Log(INFO, "Bench: start trigger OFF");
+}
+
 // bench <up|down|driver|passenger|front|rear|fanup|fandown|power> <seconds>
 static void cmdBench(int argc, char** argv) {
+  if (argc >= 2 && strcasecmp(argv[1], "start") == 0) {
+    benchStart(argc, argv);
+    return;
+  }
   if (!requireExpander()) return;
   const BenchOutput* out = nullptr;
   long seconds;
@@ -346,8 +432,12 @@ static void cmdBench(int argc, char** argv) {
       if (strcasecmp(argv[1], o.name) == 0) out = &o;
     }
   }
+  if (out && out->pin == CLIMATE_POWER_PIN && !CLIMATE_POWER_ENABLED) {
+    Log(WARN, "The climate power button is disabled (CLIMATE_POWER_ENABLED in config.h)");
+    return;
+  }
   if (!out || !parseInt(argv[2], seconds) || seconds < 1 || seconds > (long)BENCH_MAX_S) {
-    Logf(WARN, "Usage: bench <up|down|driver|passenger|front|rear|fanup|fandown|power> <1-%lu s>", (unsigned long)BENCH_MAX_S);
+    Logf(WARN, "Usage: bench <up|down|driver|passenger|front|rear|fanup|fandown|power> <1-%lu s>   or: bench start <1-10 s> confirm", (unsigned long)BENCH_MAX_S);
     return;
   }
 
@@ -394,9 +484,13 @@ static const Command commands[] = {
   {"heater", "heater <seat> <level>", "seat heater: driver|passenger, high|medium|low|off", cmdHeater},
   {"defrost", "defrost <front|rear> <on|off>", "defrost: front or rear, on or off", cmdDefrost},
   {"fan",    "fan <up|down> [n]",             "press fan speed up or down n times",           cmdFan},
-  {"power",  "power",                         "press the climate power button once (toggles)", cmdPower},
+  {"fanset", "fanset <level>",                "set the fan to an absolute speed (homes down, then up)", cmdFanSet},
+  {"fancfg", "fancfg <speeds> <extra>",       "set how many fan speeds the car has",          cmdFanCfg},
+  {"autoreset", "autoreset <on|off>",         "assume heaters/defrost off when the engine stops", cmdAutoReset},
+  {"settings", "settings",                    "show all saved settings",                      cmdSettings},
+  {"power",  "power",                         "press the climate power button once (currently DISABLED in config.h)", cmdPower},
   {"rswait", "rswait <sec>",                  "set how long start waits to confirm the engine", cmdRsWait},
-  {"bench",  "bench <name> <sec>",            "hold one output ON for metering (1-30 s)",     cmdBench},
+  {"bench",  "bench <name> <sec>",            "hold one output ON for metering (also: bench start)",     cmdBench},
   {"net",    "net",                           "show cellular connection and clock status",       cmdNet},
   {"wg",     "wg [restart]",                  "show WireGuard tunnel status, or restart it",                 cmdWg},
   {"keyadd", "keyadd <id> <role> <key>",      "enroll a client public key (role control|admin)", cmdKeyAdd},
@@ -406,6 +500,7 @@ static const Command commands[] = {
   {"authlog", "authlog",                      "show recent authentication attempts",          cmdAuthLog},
   {"authtest", "authtest",                    "run the built-in authentication self-test",    cmdAuthTest},
   {"rsenable", "rsenable [on|off]",           "allow or forbid network-requested remote start", cmdRsEnable},
+  {"i2c",    "i2c",                           "show the expander's registers (read-only)",   cmdI2c},
   {"api",    "api",                           "show HTTPS API status and certificate fingerprint", cmdApi},
   {"engine", "engine",                        "show engine running status (GWR input)",       cmdEngine},
   {"start",  "start",                         "send the remote-start trigger pulse(s)",       cmdStart},
