@@ -17,3 +17,10 @@ __pycache__/
 .pytest_cache/
 .venv/
 .DS_Store
+
+# From the earlier repo history
+.pio/
+.vscode/
+.cache/
+*.bin
+*.elf
