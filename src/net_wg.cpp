@@ -24,6 +24,10 @@ bool wgStarted() {
   return started;
 }
 
+bool wgTunnelUp() {
+  return started && wg.peer_up();
+}
+
 void wgRestart() {
   if (started) {
     wg.end();

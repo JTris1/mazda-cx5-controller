@@ -141,3 +141,10 @@ async def test_control_key_cannot_reach_admin_endpoints(client):
     for path in ("/api/v1/admin/info", "/api/v1/admin/settings", "/api/v1/admin/log"):
         with pytest.raises(Cx5ForbiddenError):
             await client.call("GET", path)
+
+
+async def test_device_logs_and_link_status(admin, device):
+    logs = await admin.call("GET", "/api/v1/admin/logs")
+    assert "Link watchdog" in logs["previous"] and "Booting" in logs["current"]
+    assert (await admin.call("GET", "/api/v1/admin/info"))["link"]["tunnel_up"] is True
+

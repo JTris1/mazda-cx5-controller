@@ -146,3 +146,11 @@ void WireGuard::end() {
 
 	this->_is_initialized = false;
 }
+
+bool WireGuard::peer_up() const {
+	if( !this->_is_initialized || wg_netif == nullptr ) return false;
+	LOCK_TCPIP_CORE();
+	bool up = wg_netif != nullptr && wireguardif_peer_is_up(wg_netif, wireguard_peer_index, nullptr, nullptr) == ERR_OK;
+	UNLOCK_TCPIP_CORE();
+	return up;
+}

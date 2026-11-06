@@ -107,7 +107,11 @@ bool otaWriteBegin(const char* presented, const char** error) {
 }
 
 bool otaWriteChunk(const uint8_t* data, size_t len, const char** error) {
-  if (state != OtaState::Receiving) { *error = "not receiving"; return false; }
+  if (state != OtaState::Receiving) {
+    Logf(ERROR, "OTA: chunk arrived but the update is not active (state %d, %lu of %lu bytes)", (int)state, (unsigned long)received, (unsigned long)declaredSize);
+    *error = "not receiving";
+    return false;
+  }
   if (received + len > declaredSize) { *error = "more data than declared"; otaAbort(); return false; }
   esp_err_t err = esp_ota_write(handle, data, len);
   if (err != ESP_OK) {
@@ -123,7 +127,11 @@ bool otaWriteChunk(const uint8_t* data, size_t len, const char** error) {
 }
 
 bool otaWriteFinish(const char** error) {
-  if (state != OtaState::Receiving) { *error = "not receiving"; return false; }
+  if (state != OtaState::Receiving) {
+    Logf(ERROR, "OTA: upload ended but the update is not active (state %d, %lu of %lu bytes)", (int)state, (unsigned long)received, (unsigned long)declaredSize);
+    *error = "not receiving";
+    return false;
+  }
   uint8_t digest[32];
   SHA_FINISH(&shaCtx, digest);
   mbedtls_sha256_free(&shaCtx);
@@ -176,12 +184,12 @@ static bool wasHealthy = false;
 
 void otaPoll() {
   uint32_t now = millis();
-  if (state == OtaState::Armed && now - armedAt > OTA_TOKEN_MS) {
+  if (state == OtaState::Armed && (int32_t)(now - armedAt) > (int32_t)OTA_TOKEN_MS) {
     Log(WARN, "OTA: armed update expired");
     reset();
   }
-  if (state == OtaState::Receiving && now - lastDataAt > OTA_IDLE_ABORT_MS) {
-    Log(WARN, "OTA: upload stalled, abandoned");
+  if (state == OtaState::Receiving && (int32_t)(now - lastDataAt) > (int32_t)OTA_IDLE_ABORT_MS) {
+    Logf(WARN, "OTA: no data for %lu s, upload abandoned (%lu of %lu bytes)", (unsigned long)((now - lastDataAt) / 1000), (unsigned long)received, (unsigned long)declaredSize);
     otaAbort();
   }
 

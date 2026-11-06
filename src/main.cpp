@@ -6,6 +6,7 @@
 #include "auth.h"
 #include "console.h"
 #include "engine.h"
+#include "link_watch.h"
 #include "log.h"
 #include "net_wg.h"
 #include "net_cell.h"
@@ -49,6 +50,7 @@ void setup() {
 void loop() {
   timePoll();
   wgPoll();
+  linkWatchPoll();
   apiPoll();
   consolePoll();
 }

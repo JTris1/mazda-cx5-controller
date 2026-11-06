@@ -6,6 +6,7 @@
 #include "climate.h"
 #include "config.h"
 #include "engine.h"
+#include "link_watch.h"
 #include "log.h"
 #include "net_wg.h"
 #include "net_cell.h"
@@ -258,6 +259,7 @@ static void cmdEngine(int argc, char** argv) {
 
 static void cmdNet(int argc, char** argv) {
   cellPrintStatus();
+  linkWatchPrintStatus();
 }
 
 // wg           show tunnel status

@@ -71,6 +71,10 @@ class MockDevice:
         self.pending_verify = False
         self.ota: dict[str, Any] = {"state": "idle", "token": None, "size": 0, "sha": "", "version": "", "received": 0, "armed": 0.0}
         self.ota_events: list[str] = []
+        self.log_current = "10-31 08:00:01Z I Booting...\n10-31 08:00:09Z I Cellular: connected, IP 10.0.0.2\n"
+        self.log_previous = ("10-30 22:14:03Z W Link watchdog: tunnel down 180 s, restarting the tunnel\n"
+                             "10-30 22:19:03Z W Link watchdog: tunnel down 480 s, restarting the cellular link\n"
+                             "10-30 22:19:05Z E Cellular: modem did not attach to the network\n")
         self.page_path = os.path.join(os.path.dirname(__file__), "..", "..", "web", "admin.html")
         self.remote_start_enabled = True
         self.start_cooldown = 60.0
@@ -506,8 +510,11 @@ class MockDevice:
             return 200, {"firmware": self.firmware_version, "cert_fingerprint": ":".join(self.fingerprint[i:i + 2].upper() for i in range(0, 64, 2)), "build": "mock", "uptime_s": int(self.now() - self.uptime_start),
                          "reset_reason": "power-on", "free_heap": 123456, "min_free_heap": 100000, "cellular": True,
                          "tunnel": True, "keys": len(self.keys), "you": key_id,
+                         "link": {"tunnel_up": True, "bad_for_s": 0, "watchdog_step": 0, "watchdog_restarts": 0},
                          "remote_start_enabled": self.remote_start_enabled, "running_slot": self.slot,
                          "next_slot": "app1" if self.slot == "app0" else "app0", "slot_size": 6553600}
+        if path == "/api/v1/admin/logs" and method == "GET":
+            return 200, {"current": self.log_current, "previous": self.log_previous, "reset_reason": "link watchdog restart"}
         if path == "/api/v1/admin/log" and method == "GET":
             return 200, {"entries": [{"age_s": int(self.now() - t), "ip": "10.8.0.3", "key": k, "result": r}
                                      for t, k, r in reversed(self.auth_log[-32:])]}

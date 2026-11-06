@@ -28,6 +28,7 @@ IndexedDB, which browsers only allow on https pages.
 | Keys | List, add, change role, revoke. You cannot revoke or demote the key you are signed in with. 8 keys at most |
 | Settings | Button timing, temperature range, fan speeds, remote start pulses, reset-on-engine-stop. Validated on the controller; refused while a command runs |
 | Remote start | Enable or disable network remote start |
+| Device log | What the controller printed, current run and the run before the last restart, filterable to warnings and errors |
 | Sign-in log | The last 32 attempts: key, address and why it was accepted or refused |
 | Firmware update | Pick `firmware.bin`, check it, upload, then restart into it (see below) |
 | Restart | Restarts the controller |

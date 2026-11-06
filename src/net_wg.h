@@ -8,6 +8,9 @@ void wgPoll();
 
 bool wgStarted();
 
+// True while the tunnel has a valid session with the server (a recent successful handshake).
+bool wgTunnelUp();
+
 // Stops the tunnel; wgPoll() starts it again on its next pass (handy while debugging).
 void wgRestart();
 

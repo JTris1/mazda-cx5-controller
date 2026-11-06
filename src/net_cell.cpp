@@ -22,6 +22,11 @@ static volatile CellState state = CellState::Starting;
 static volatile uint32_t connectedAt = 0;
 static volatile uint32_t lastFailureAt = 0;
 static char lastFailure[48] = "";
+static volatile bool restartRequested = false;
+
+void cellRequestRestart() {
+  restartRequested = true;
+}
 
 static constexpr uint32_t RETRY_MIN_MS = 10000;
 static constexpr uint32_t RETRY_MAX_MS = 120000;
@@ -194,8 +199,9 @@ static void cellTask(void*) {
       connectedAt = millis();
       state = CellState::Connected;
       Logf(INFO, "Cellular: connected, IP %s", PPP.localIP().toString().c_str());
-      while (PPP.hasIP()) vTaskDelay(pdMS_TO_TICKS(1000));
-      fail("connection lost");
+      while (PPP.hasIP() && !restartRequested) vTaskDelay(pdMS_TO_TICKS(1000));
+      fail(restartRequested ? "restart requested by the link watchdog" : "connection lost");
+      restartRequested = false;
     }
 
     PPP.end();

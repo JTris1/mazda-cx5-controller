@@ -44,6 +44,7 @@ Public keys are enrolled as base64 of the 65-byte uncompressed point (`04 || X |
 | `DELETE /api/v1/admin/keys/<id>` | none | admin |
 | `GET /api/v1/admin/info` | none | admin |
 | `GET /api/v1/admin/log` | none (recent sign-in attempts, newest first) | admin |
+| `GET /api/v1/admin/logs` | none (`current`, `previous`: the device log as text, `reset_reason`) | admin |
 | `GET /api/v1/admin/settings` | none | admin |
 | `POST /api/v1/admin/settings` | any subset of the settings fields below | admin |
 | `POST /api/v1/admin/remote-start-enabled` | `{"enabled": true\|false}` | admin |
@@ -147,3 +148,15 @@ Network-requested starts are refused until remote start is enabled (`rsenable on
 admin page / `POST /api/v1/admin/remote-start-enabled`), and then
 limited to one per 60 s, 3 per hour and 10 per day. The request must also use a challenge that is
 at most 15 s old. The serial `start` command is not affected.
+
+## Device log and the link watchdog
+
+Every line the device prints is also kept in a 6 KB ring buffer in RTC memory, which survives a crash, watchdog or
+brownout restart (not a full power loss). `GET /api/v1/admin/logs` returns this run (`current`) and the run before
+the last restart (`previous`). The admin page shows both.
+
+The link watchdog repairs the network without anyone watching: tunnel without a valid session for 3 minutes
+restarts the tunnel (and again every 5 minutes while it stays down, because the WireGuard library gives up after about 90 s and never retries by itself, which is what a router outage looks like), 8 minutes restarts the cellular link, 20 minutes restarts the device (and 15 minutes with no
+cellular link at all restarts the device). Restarts are held back while a command runs or firmware is written, and each
+consecutive watchdog restart waits longer (20, 40, 80, then 120 minutes). `GET /api/v1/admin/info` has a `link`
+object with the current state, and the `net` console command prints it.

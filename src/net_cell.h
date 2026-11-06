@@ -9,6 +9,8 @@ void cellBegin();
 // True once PPP has an IP address.
 bool cellConnected();
 
+// Drops the data link and lets the connection task bring it up again (used by the link watchdog).
+void cellRequestRestart();
 // One-shot report used by the "net" console command.
 void cellPrintStatus();
 

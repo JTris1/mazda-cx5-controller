@@ -7,6 +7,7 @@
 #include "api.h"
 #include "auth.h"
 #include "config.h"
+#include "link_watch.h"
 #include "log.h"
 #include "net_cell.h"
 #include "net_wg.h"
@@ -77,7 +78,7 @@ static esp_err_t handleFirstKey(httpd_req_t* req) {
 static const char* resetReasonText() {
   switch (esp_reset_reason()) {
     case ESP_RST_POWERON:  return "power-on";
-    case ESP_RST_SW:       return "software restart";
+    case ESP_RST_SW:       return linkWatchRestartedUs() ? "link watchdog restart" : "software restart";
     case ESP_RST_PANIC:    return "crash (panic)";
     case ESP_RST_BROWNOUT: return "brownout (supply dipped)";
     case ESP_RST_INT_WDT:
@@ -104,6 +105,13 @@ static esp_err_t handleInfo(httpd_req_t* req) {
   doc["cellular"] = cellConnected();
   doc["tunnel"] = wgStarted();
   doc["keys"] = authKeyCount();
+  LinkWatchInfo lw;
+  linkWatchInfo(lw);
+  JsonObject link = doc["link"].to<JsonObject>();
+  link["tunnel_up"] = lw.tunnelUp;
+  link["bad_for_s"] = lw.badForSeconds;
+  link["watchdog_step"] = lw.step;
+  link["watchdog_restarts"] = lw.watchdogRestarts;
   doc["you"] = call.who.keyId;
   doc["remote_start_enabled"] = remoteStartEnabled();
   const esp_partition_t* run = esp_ota_get_running_partition();
@@ -131,6 +139,18 @@ static esp_err_t handleLog(httpd_req_t* req) {
     o["key"] = item.keyId;
     o["result"] = authResultText(item.result);
   }
+  return reply(req, 200, doc);
+}
+
+// GET /api/v1/admin/logs  -> {"current":"...","previous":"..."}  (every line the device printed, newest last)
+static esp_err_t handleLogs(httpd_req_t* req) {
+  if (!arrivedOnTunnel(req)) return ESP_FAIL;
+  Call call;
+  if (!authenticate(req, Role::Admin, call)) return ESP_OK;
+  JsonDocument doc;
+  doc["current"] = logHistory(false);
+  doc["previous"] = logHistory(true);
+  doc["reset_reason"] = resetReasonText();
   return reply(req, 200, doc);
 }
 
@@ -310,6 +330,7 @@ void adminRegister() {
   apiAddHandler("/api/v1/setup/first-key", HTTP_POST, handleFirstKey);
   apiAddHandler("/api/v1/admin/info", HTTP_GET, handleInfo);
   apiAddHandler("/api/v1/admin/log", HTTP_GET, handleLog);
+  apiAddHandler("/api/v1/admin/logs", HTTP_GET, handleLogs);
   apiAddHandler("/api/v1/admin/settings", HTTP_GET, handleSettingsGet);
   apiAddHandler("/api/v1/admin/settings", HTTP_POST, handleSettingsSet);
   apiAddHandler("/api/v1/admin/remote-start-enabled", HTTP_POST, handleRemoteStartEnabled);

@@ -16,3 +16,4 @@ src/admin_page.gen.h
 __pycache__/
 .pytest_cache/
 .venv/
+.DS_Store

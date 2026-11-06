@@ -101,6 +101,19 @@ dialog::backdrop{background:#0008}
     <button id="rs-toggle"></button>
   </section>
 
+  <section aria-labelledby="h-dlog">
+    <h2 id="h-dlog">Device log</h2>
+    <p class="muted">What the controller printed, kept in memory that survives a crash or restart. <b>Previous run</b> shows what happened before the last restart. A full power loss clears it.</p>
+    <div class="row">
+      <div><label for="dl-which">Show</label><select id="dl-which"><option value="previous">Previous run (before the last restart)</option><option value="current">This run</option></select></div>
+      <div><label for="dl-level">Lines</label><select id="dl-level"><option value="all">Everything</option><option value="warn">Warnings and errors only</option></select></div>
+      <button id="dl-refresh" class="small">Refresh</button>
+      <button id="dl-copy" class="small">Copy</button>
+    </div>
+    <p id="dl-note" class="muted"></p>
+    <pre id="dl-text" class="mono" style="max-height:340px;overflow:auto;white-space:pre-wrap;margin:0;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)" tabindex="0" aria-label="Device log"></pre>
+  </section>
+
   <section aria-labelledby="h-log">
     <h2 id="h-log">Sign-in log</h2>
     <p class="muted">Recent attempts, newest first. The device keeps the last 32 in RAM.</p>
@@ -331,7 +344,7 @@ async function loadInfo() {
   const i = await api("GET", "/api/v1/admin/info");
   const rows = [["Firmware", i.firmware + " (" + i.build + ")"], ["Running from", i.running_slot + " (next update goes to " + i.next_slot + ")"],
     ["Uptime", Math.floor(i.uptime_s / 60) + " min"], ["Last restart", i.reset_reason], ["Free memory", Math.round(i.free_heap / 1024) + " KB (lowest " + Math.round(i.min_free_heap / 1024) + " KB)"],
-    ["Cellular", i.cellular ? "connected" : "down"], ["Tunnel", i.tunnel ? "up" : "down"], ["Keys", i.keys + " of 8"]];
+    ["Cellular", i.cellular ? "connected" : "down"], ["Tunnel", i.link.tunnel_up ? "up" : "DOWN for " + i.link.bad_for_s + " s (watchdog step " + i.link.watchdog_step + ")"], ["Watchdog restarts in a row", i.link.watchdog_restarts], ["Keys", i.keys + " of 8"]];
   $("#info").replaceChildren(...rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, String(v))]));
   setRs(i.remote_start_enabled);
   const copyRow = (label, value) => [h("dt", {}, label), h("dd", {}, h("span", { class: "mono" }, value), " ", copyButton(value, "Copy"))];
@@ -378,6 +391,22 @@ function setRs(on) {
   b.className = on ? "" : "primary";
   b.dataset.on = on ? "1" : "0";
 }
+
+let deviceLogs = null;
+function showDeviceLog() {
+  if (!deviceLogs) return;
+  const which = $("#dl-which").value, warnOnly = $("#dl-level").value === "warn";
+  let lines = (deviceLogs[which] || "").split("\n").filter(Boolean);
+  if (warnOnly) lines = lines.filter((l) => / [WE] /.test(l.slice(0, 24)));
+  $("#dl-text").textContent = lines.length ? lines.join("\n") : "(nothing to show)";
+  $("#dl-note").textContent = "Last restart: " + deviceLogs.reset_reason + ". " + lines.length + " line" + (lines.length === 1 ? "" : "s") + ".";
+  $("#dl-text").scrollTop = $("#dl-text").scrollHeight;
+}
+async function loadDeviceLog() { deviceLogs = await api("GET", "/api/v1/admin/logs"); showDeviceLog(); }
+$("#dl-which").addEventListener("change", showDeviceLog);
+$("#dl-level").addEventListener("change", showDeviceLog);
+$("#dl-refresh").addEventListener("click", guard(loadDeviceLog));
+$("#dl-copy").addEventListener("click", guard(async () => { await navigator.clipboard.writeText($("#dl-text").textContent); toast("Copied"); }));
 
 async function loadLog() {
   const { entries } = await api("GET", "/api/v1/admin/log");
@@ -476,6 +505,7 @@ async function loadAdmin() {
   await loadInfo();
   await loadKeys();
   await loadLog();
+  await loadDeviceLog();
   await loadFirmware();
   renderSettings(await api("GET", "/api/v1/admin/settings"));
 }
