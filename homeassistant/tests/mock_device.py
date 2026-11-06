@@ -72,6 +72,9 @@ class MockDevice:
         self.ota: dict[str, Any] = {"state": "idle", "token": None, "size": 0, "sha": "", "version": "", "received": 0, "armed": 0.0}
         self.ota_events: list[str] = []
         self.log_current = "10-31 08:00:01Z I Booting...\n10-31 08:00:09Z I Cellular: connected, IP 10.0.0.2\n"
+        self.log_saved = ("10-27 03:00:00Z HB up=86400s heap=180000 min=150000 cell=up tunnel=up bad=0s wd_step=0 wd_restarts=0\n"
+                           "10-27 03:15:00Z HB up=87300s heap=180000 min=150000 cell=up tunnel=DOWN bad=420s wd_step=2 wd_restarts=0\n"
+                           "11-01 12:00:00Z BOOT reset=power-on (supply was cut) fw=0.2.0\n")
         self.log_previous = ("10-30 22:14:03Z W Link watchdog: tunnel down 180 s, restarting the tunnel\n"
                              "10-30 22:19:03Z W Link watchdog: tunnel down 480 s, restarting the cellular link\n"
                              "10-30 22:19:05Z E Cellular: modem did not attach to the network\n")
@@ -514,7 +517,7 @@ class MockDevice:
                          "remote_start_enabled": self.remote_start_enabled, "running_slot": self.slot,
                          "next_slot": "app1" if self.slot == "app0" else "app0", "slot_size": 6553600}
         if path == "/api/v1/admin/logs" and method == "GET":
-            return 200, {"current": self.log_current, "previous": self.log_previous, "reset_reason": "link watchdog restart"}
+            return 200, {"current": self.log_current, "previous": self.log_previous, "saved": self.log_saved, "reset_reason": "link watchdog restart"}
         if path == "/api/v1/admin/log" and method == "GET":
             return 200, {"entries": [{"age_s": int(self.now() - t), "ip": "10.8.0.3", "key": k, "result": r}
                                      for t, k, r in reversed(self.auth_log[-32:])]}

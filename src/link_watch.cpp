@@ -15,6 +15,9 @@ constexpr uint32_t TUNNEL_RETRY_MS = 5 * 60000;     // keep retrying the tunnel 
 constexpr uint32_t CELL_RESTART_MS = 8 * 60000;
 constexpr uint32_t DEVICE_RESTART_MS = 20 * 60000;
 constexpr uint32_t CELL_DOWN_RESTART_MS = 15 * 60000;
+// A restart held back for a running command or an upload goes ahead anyway after this long (a stuck job must not
+// keep a dead device dead).
+constexpr uint32_t OVERDUE_MS = 30 * 60000;
 constexpr uint32_t MAX_DEVICE_RESTART_MS = 120 * 60000;
 
 constexpr uint32_t WD_MAGIC = 0x57444731;
@@ -44,6 +47,24 @@ static void watchInit() {
   restartedUs = wdRequested == 1;
   wdRequested = 0;
   if (restartedUs) Logf(WARN, "Link watchdog: the previous restart was requested by the watchdog (%lu in a row)", (unsigned long)wdConsecutive);
+}
+
+void linkWatchBegin() {
+  if (!initDone) watchInit();
+}
+
+const char* resetReasonText() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:  return "power-on (supply was cut)";
+    case ESP_RST_SW:       return restartedUs ? "link watchdog restart" : "software restart";
+    case ESP_RST_PANIC:    return "crash (panic)";
+    case ESP_RST_BROWNOUT: return "brownout (supply dipped)";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:      return "watchdog (the firmware hung)";
+    case ESP_RST_EXT:      return "reset pin";
+    default:               return "other";
+  }
 }
 
 static bool safeToRestart() {
@@ -77,7 +98,7 @@ void linkWatchPoll() {
     cellDownSince = 0;
   } else {
     if (!cellDownSince) cellDownSince = now;
-    if (now - cellDownSince >= CELL_DOWN_RESTART_MS && safeToRestart()) restartDevice("cellular link down for 15 minutes");
+    if (now - cellDownSince >= CELL_DOWN_RESTART_MS && (safeToRestart() || now - cellDownSince >= CELL_DOWN_RESTART_MS + OVERDUE_MS)) restartDevice("cellular link down for 15 minutes");
   }
 
   // --- the tunnel ---
@@ -115,7 +136,7 @@ void linkWatchPoll() {
   if (step == 3) {
     // Each restart in a row waits longer: 20, 40, 80, then 120 minutes.
     uint32_t wait = min<uint32_t>(DEVICE_RESTART_MS << min<uint32_t>(wdConsecutive, 3), MAX_DEVICE_RESTART_MS);
-    if (bad >= wait && safeToRestart()) restartDevice("the tunnel never came back");
+    if (bad >= wait && (safeToRestart() || bad >= wait + OVERDUE_MS)) restartDevice("the tunnel never came back");
   }
 }
 

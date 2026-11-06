@@ -24,3 +24,9 @@ void linkWatchInfo(LinkWatchInfo& out);
 
 // True if the previous restart was requested by this watchdog (valid for the whole run).
 bool linkWatchRestartedUs();
+
+// Call once at boot (before the first log lines about the reset reason are written).
+void linkWatchBegin();
+
+// Why the chip last restarted, as text ("power-on", "crash (panic)", "brownout (supply dipped)", "watchdog", ...).
+const char* resetReasonText();

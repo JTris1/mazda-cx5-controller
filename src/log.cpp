@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <stdarg.h>
 #include "log.h"
+#include "flash_log.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
@@ -26,6 +27,17 @@ static String ringText() {
   for (size_t i = 0; i < count; i++) out += ring[(start + i) % RING_SIZE];
   int nl = ringWrapped ? out.indexOf('\n') : -1;       // drop the first, possibly cut, line
   return nl >= 0 ? out.substring(nl + 1) : out;
+}
+
+void logStamp(char* out, size_t outLen) {
+  time_t now = time(nullptr);
+  if (now > 1700000000) {                       // the clock has been set (NTP)
+    struct tm t;
+    gmtime_r(&now, &t);
+    snprintf(out, outLen, "%02d-%02d %02d:%02d:%02dZ", t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
+  } else {
+    snprintf(out, outLen, "+%lus", (unsigned long)(millis() / 1000));
+  }
 }
 
 static void ringAdd(const char* line) {
@@ -59,18 +71,12 @@ void Log(LogTypes type, const char* message) {
   if (logMutex) xSemaphoreTake(logMutex, portMAX_DELAY);
   if (ringMagic == RING_MAGIC) {
     char stamp[24];
-    time_t now = time(nullptr);
-    if (now > 1700000000) {                       // the clock has been set (NTP)
-      struct tm t;
-      gmtime_r(&now, &t);
-      snprintf(stamp, sizeof(stamp), "%02d-%02d %02d:%02d:%02dZ", t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
-    } else {
-      snprintf(stamp, sizeof(stamp), "+%lus", (unsigned long)(millis() / 1000));
-    }
+    logStamp(stamp, sizeof(stamp));
     char line[176];
     snprintf(line, sizeof(line), "%s %c %s", stamp, "IDWE"[type], message);
     ringAdd(line);
   }
+  flashLogQueue(type, message);
   switch (type) {
     case INFO:
       Serial.printf("INFO  | %s\n", message);

@@ -14,4 +14,7 @@ void Logf(LogTypes type, const char* fmt, ...);
 // Log history for the admin page. Every line also goes into a ring buffer kept in RTC memory, which survives a
 // crash, a watchdog or brownout restart and software restarts (but not a full power loss). After a restart the
 // previous run's last lines are available as "previous", which is what shows why the device went away.
+// "MM-DD HH:MM:SSZ" once the clock is set, "+123s" (seconds since boot) before that.
+void logStamp(char* out, size_t outLen);
+
 String logHistory(bool previous);   // oldest line first, one per line; empty if there is none

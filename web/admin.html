@@ -103,9 +103,9 @@ dialog::backdrop{background:#0008}
 
   <section aria-labelledby="h-dlog">
     <h2 id="h-dlog">Device log</h2>
-    <p class="muted">What the controller printed, kept in memory that survives a crash or restart. <b>Previous run</b> shows what happened before the last restart. A full power loss clears it.</p>
+    <p class="muted">What the controller printed, kept in memory that survives a crash or restart. <b>Saved</b> is written to flash: warnings, network events and a heartbeat every 15 minutes, so the last heartbeat shows when the device stopped. <b>Previous run</b> is more detailed but only survives a restart, not a power loss.</p>
     <div class="row">
-      <div><label for="dl-which">Show</label><select id="dl-which"><option value="previous">Previous run (before the last restart)</option><option value="current">This run</option></select></div>
+      <div><label for="dl-which">Show</label><select id="dl-which"><option value="saved">Saved (survives power loss)</option><option value="previous">Previous run (lost if power was cut)</option><option value="current">This run</option></select></div>
       <div><label for="dl-level">Lines</label><select id="dl-level"><option value="all">Everything</option><option value="warn">Warnings and errors only</option></select></div>
       <button id="dl-refresh" class="small">Refresh</button>
       <button id="dl-copy" class="small">Copy</button>

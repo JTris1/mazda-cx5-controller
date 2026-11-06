@@ -7,6 +7,7 @@
 #include "api.h"
 #include "auth.h"
 #include "config.h"
+#include "flash_log.h"
 #include "link_watch.h"
 #include "log.h"
 #include "net_cell.h"
@@ -75,20 +76,6 @@ static esp_err_t handleFirstKey(httpd_req_t* req) {
   return reply(req, 201, out);
 }
 
-static const char* resetReasonText() {
-  switch (esp_reset_reason()) {
-    case ESP_RST_POWERON:  return "power-on";
-    case ESP_RST_SW:       return linkWatchRestartedUs() ? "link watchdog restart" : "software restart";
-    case ESP_RST_PANIC:    return "crash (panic)";
-    case ESP_RST_BROWNOUT: return "brownout (supply dipped)";
-    case ESP_RST_INT_WDT:
-    case ESP_RST_TASK_WDT:
-    case ESP_RST_WDT:      return "watchdog";
-    case ESP_RST_EXT:      return "reset pin";
-    default:               return "other";
-  }
-}
-
 // GET /api/v1/admin/info
 static esp_err_t handleInfo(httpd_req_t* req) {
   if (!arrivedOnTunnel(req)) return ESP_FAIL;
@@ -150,6 +137,7 @@ static esp_err_t handleLogs(httpd_req_t* req) {
   JsonDocument doc;
   doc["current"] = logHistory(false);
   doc["previous"] = logHistory(true);
+  doc["saved"] = flashLogRead(14000);          // survives a power loss: warnings, network events, heartbeats
   doc["reset_reason"] = resetReasonText();
   return reply(req, 200, doc);
 }

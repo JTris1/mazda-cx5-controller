@@ -152,11 +152,17 @@ at most 15 s old. The serial `start` command is not affected.
 ## Device log and the link watchdog
 
 Every line the device prints is also kept in a 6 KB ring buffer in RTC memory, which survives a crash, watchdog or
-brownout restart (not a full power loss). `GET /api/v1/admin/logs` returns this run (`current`) and the run before
-the last restart (`previous`). The admin page shows both.
+brownout restart (not a full power loss). `GET /api/v1/admin/logs` returns this run (`current`), the run before
+the last restart (`previous`) and `saved`, a log kept in flash that survives power loss: warnings, errors, network events,
+a `BOOT` line (with the reset reason) at every start, and a heartbeat every 15 minutes. The last heartbeat before a long
+outage shows when the device stopped being alive. Two files of up to 96 KB are kept (about 20 days). The admin page shows both.
 
 The link watchdog repairs the network without anyone watching: tunnel without a valid session for 3 minutes
 restarts the tunnel (and again every 5 minutes while it stays down, because the WireGuard library gives up after about 90 s and never retries by itself, which is what a router outage looks like), 8 minutes restarts the cellular link, 20 minutes restarts the device (and 15 minutes with no
 cellular link at all restarts the device). Restarts are held back while a command runs or firmware is written, and each
 consecutive watchdog restart waits longer (20, 40, 80, then 120 minutes). `GET /api/v1/admin/info` has a `link`
 object with the current state, and the `net` console command prints it.
+
+If the main loop ever stops running, a hardware watchdog restarts the chip after 60 seconds (reset reason "watchdog
+(the firmware hung)"), and a watchdog restart that a running command or upload was blocking goes ahead anyway after 30
+minutes.

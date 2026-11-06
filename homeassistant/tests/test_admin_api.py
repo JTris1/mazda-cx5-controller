@@ -148,3 +148,8 @@ async def test_device_logs_and_link_status(admin, device):
     assert "Link watchdog" in logs["previous"] and "Booting" in logs["current"]
     assert (await admin.call("GET", "/api/v1/admin/info"))["link"]["tunnel_up"] is True
 
+
+
+async def test_saved_log_is_returned(admin, device):
+    logs = await admin.call("GET", "/api/v1/admin/logs")
+    assert "HB up=" in logs["saved"] and "BOOT reset=power-on" in logs["saved"]
