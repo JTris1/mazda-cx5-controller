@@ -12,23 +12,42 @@ module. Budget: under $10/month for connectivity. Prototype first, custom PCB la
 
 ## Status
 
-The firmware lives in a separate PlatformIO project: `~/Documents/PlatformIO/Projects/Mazda-CX-5-Controller`
-(this folder holds the KiCad work in `hardware/`). Its `docs/` has `api.md`, `wireguard-server.md`,
-`home-assistant.md` and `admin-page.md`.
+The firmware project (this repo, `~/Documents/PlatformIO/Projects/Mazda-CX-5-Controller`) is the one pushed to
+GitHub (`JTris1/mazda-cx5-controller`, branch `main`). Its `docs/` has `api.md`, `wireguard-server.md`,
+`home-assistant.md` and `admin-page.md`; `design-notes.md` and `bench-test.md` are older and partly stale. The KiCad
+work is in `~/Documents/mazda-cx5-controller/hardware/` (that folder is an older clone of the same GitHub repo; keep
+its `hardware/` untracked until the user decides, and do not push from it).
 
-* **Working on hardware:** serial console, climate outputs through the MCP23017, remote start (iDatastart
+* **Working on hardware (installed in the car):** climate outputs through the MCP23017, remote start (iDatastart
   trigger on GPIO 40, engine-running input on GPIO 39 from the module's POC1 programmed to F24), cellular (PPP
   over the SIM7670G, Telnyx APN `data00.telnyx`), WireGuard tunnel to the user's OpenWrt router (ESP32 tunnel
-  IP 192.168.10.2), HTTPS API with ECDSA P-256 signed requests.
-* **Written and built, not yet verified on hardware:** tracked climate state in flash, absolute fan, persistent
-  settings, expanded `state`, `assume`, admin API, `/admin` page, OTA with rollback. The Python mock device
-  (`homeassistant/tests/`) passes 70 tests and the admin page was driven in a browser against it.
-* **Home Assistant integration** (`homeassistant/custom_components/cx5_controller`): written and tested against the
-  mock, not yet installed on the user's Home Assistant OS box.
+  IP 192.168.10.2), HTTPS API with ECDSA P-256 signed requests, admin page, Home Assistant integration (installed
+  on the user's HA OS box and polling).
+* **Written and built, not verified on hardware:** link watchdog (`src/link_watch.*`: restarts the tunnel after
+  3 min and every 5 min while down, the cellular link at 8 min, the device at 20 min or 15 min without cellular,
+  with growing back-off; an overdue restart goes ahead after 30 extra min), a hang watchdog on the main loop (60 s),
+  and the logs: an RTC-memory ring (survives crash/software restart, not power loss) and a flash log on LittleFS
+  (`src/flash_log.*`: warnings, network events, a heartbeat every 15 min, a BOOT line with the reset reason; survives
+  power loss). Read them on the admin page, Device log, option "Saved". Flash these and check a heartbeat appears.
+* **Open problem, OTA:** an upload through the admin page ended with "Failed: not receiving". A timing race in the
+  stall check was fixed and the log now says why an update was inactive, but it is not confirmed fixed. Ask for the
+  Device log lines from the first `OTA:` entry. Until it is proven, plan on a USB flash for risky changes.
+* **Open problem, outages:** the device was unreachable for days twice. The first was a router firmware upgrade (the
+  WireGuard library gives up after about 90 s and never retries by itself, which the watchdog now handles). The second
+  (4 days) has no known cause: the old log was lost when the device was unplugged. Next time, read the "Saved" log:
+  heartbeats that stop then a "power-on" BOOT line mean it was dead or unpowered; heartbeats with the tunnel DOWN mean
+  the network.
+* **Tried and abandoned: GPS and a live modem command channel.** The modem cannot take AT commands while PPP carries
+  data, and the CMUX mode that would allow it fails on this modem (`esp_modem_set_mode` returns ESP_FAIL on
+  CMUX_MANUAL). LilyGO's own examples read GPS NMEA over the same UART (the GPIO 48/45 pins are for an external GPS
+  module), so there is no side door. A workable design, if wanted later: drop the data link on demand (engine stop or a
+  "Locate" button), read GNSS in the existing pre-PPP AT phase, then reconnect (about a minute offline). The CMUX
+  experiment is only on the local `gps` branch (not pushed).
 * Climate power button: disabled in firmware (`CLIMATE_POWER_ENABLED`); its panel line misbehaved.
-* Unresolved: an ESP32 reboot at engine start (likely supply dip or ground loop; the reset reason is now logged
-  at boot and shown on the admin page).
+* Unresolved: an ESP32 reboot at engine start (likely supply dip or ground loop; the reset reason is logged at boot,
+  stored in the flash log and shown on the admin page).
 * Not started: battery-voltage lockout, CAN read-only telemetry, custom carrier PCB, faster modem UART for OTA.
+* Tests: `homeassistant/tests` (mock device, API client, integration, admin, OTA) pass 74 tests.
 
 ## Hardware (decided)
 
@@ -88,7 +107,9 @@ simple push buttons. Only pins 1-3 are used. No state feedback exists until CAN.
 
 ## Build
 
-In the firmware project: `~/.platformio/penv/bin/pio run` (macOS). `tools/embed_web.py` gzips `web/admin.html`
+In the firmware project: `~/.platformio/penv/bin/pio run` (macOS). PlatformIO's pioarduino platform needs Python
+3.10-3.13 (macOS system Python 3.9 is too old; `pip install uv` then `uv python install 3.12` works). The Home
+Assistant tests need Python 3.14 (`pytest-homeassistant-custom-component` for HA 2026). `tools/embed_web.py` gzips `web/admin.html`
 into `src/admin_page.gen.h` on every build. Secrets are untracked: `src/secrets.h` (WireGuard keys) and
 `src/tls_cert.h` (run `tools/gen_cert.sh`). Python tests: `homeassistant/requirements_test.txt`, then
 `python -m pytest` inside `homeassistant/`. On macOS/Linux `pio run -t upload` works; on WSL2 flash from the host
