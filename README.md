@@ -7,57 +7,55 @@
 >
 > Also, I know this README kinda blows because Claude wrote it. I made some edits, but it is still kind of difficult to follow.
 
-Remote control for the Mazda CX-5's climate controls, built around an ESP32-S3 and a cellular
-modem. The goal is to warm up (or cool down) the cabin before you get in, without paying
-a monthly subscription to the manufacturer. Ideally, this will be paired with a remote starter,
-or with Mazda's Connected Services remote start subscription. But neither are required.
+Remote control for the Mazda CX-5's climate controls and an aftermarket remote starter, built around an ESP32-S3
+and a cellular modem. The goal is to warm up (or cool down) the cabin before you get in, without paying a monthly
+subscription to the manufacturer. You control it from Home Assistant or from a small admin web page that the device
+serves itself.
 
 > [!NOTE]
-> **Status: early prototype.** The bench-test firmware is written and compiles, but it
-> has not yet been tested in a car. See [Build Log](#build-log) for my latest physical build updates.
-> Cellular connectivity and the remote-start trigger are planned but not built. See [Roadmap](#roadmap).
+> **Status: installed in a car and working, still a prototype.** Cellular, the VPN tunnel, the signed API, the
+> climate buttons, remote start and the Home Assistant integration work. Some newer features (the self-repair
+> watchdog, the flash log, over-the-air updates) are written and tested against a simulator but not yet proven on
+> the real device. See [Status](#status) and the [Build Log](#build-log).
 
 ## What it does
 
-The firmware presses the buttons on your car's climate control panel for you. A small
-microcontroller drives optocouplers that connect directly to the panel's switch pads, so
-the panel sees the same signal it would see from a finger on the button.
-
-It can currently:
-
-- Raise or lower the driver's temperature setting, one step at a time
-- Set an exact temperature (for example `temp 72`)
-- Press the driver and passenger seat heater buttons
-- Press the front and rear defrost buttons
-- Accept commands from physical buttons on a breadboard or from a USB serial console
-
-Planned (not yet implemented): trigger a remote-start module, receive commands over a cellular connection with MQTT and Home Assistant, implement CAN bus reading which can be broadcast over an on-demand wifi network, and report battery voltage and status.
+- Presses the climate panel's buttons for you: temperature (an absolute value, 60-84 F), fan speed (1-7), driver and
+  passenger seat heaters, front and rear defrost
+- Triggers an iDatastart remote-start module and confirms that the engine actually started
+- Lives on a cellular SIM (no Wi-Fi), reachable only through a WireGuard tunnel to your home network
+- Accepts only cryptographically signed requests (per-device keys, so a stolen phone can be revoked)
+- Home Assistant integration with a thermostat, fan, seat heater, defrost, remote-start button and status sensors
+- A built-in admin page: manage keys, change settings, read logs, push firmware updates over the air
+- Repairs itself when the network drops (restarts the tunnel, the cellular link, or the device) and keeps a log in
+  flash that survives a power cut
 
 ## Why this approach
 
 Mazda keeps their climate settings on an internal network. I couldn't find a way to send update signals through CAN or LIN to change the values. Simulating a button press is the only way I could figure out how to make this work, and it is probably the easiest route anyways. The downside is that you must physically wire into the climate panel, which means soldering fine wires to its circuit board.
+
+Because the panel can't report its state, the device remembers what it **last commanded** and shows that. Temperature
+and fan are set by pressing down to the lowest value and then up to the target, so they are always right. Seat
+heaters and defrost can drift if someone uses the physical buttons; Home Assistant has a "resync" service for that.
 
 The target vehicle is a 2022 Mazda CX-5 Turbo Signature with heated and ventilated seats and automatic climate control. Other vehicles may work if their buttons are simple switches, but you will have to work out the wiring yourself.
 
 ## How it works
 
 ```
- Command source                 ESP32-S3                    Climate panel
- --------------                 --------                    -------------
- Serial console  ----\                                 /--> Temperature up/down
- Bench buttons   -----+--> command queue --> I2C       |--> Seat heater (driver)
- (later) MQTT    ----/      (FreeRTOS task)   expander -+--> Seat heater (passenger)
-                                              + opto-   |--> Front defrost
-                                              couplers  \--> Rear defrost
+ Home Assistant ----\                          (home network)
+ Admin web page -----+--> WireGuard tunnel --> router ... internet ... cell tower
+ Python client  ----/                                                       |
+                                                                      SIM7670G modem
+ ESP32-S3: HTTPS API (signed requests) -> job queue -> I2C expander -> PC817 optocouplers -> climate panel pads
+                                       \-> trigger output ------------> remote-start module
+                                        <- engine-running input <------ remote-start module
 ```
 
-Each button is "pressed" by briefly turning on an optocoupler (a PC817) that connects
-the button's two pads together. An I2C expander (MCP23017) provides the output pins, so
-adding more buttons later does not use up the ESP32's GPIOs.
-
-Because the car does not report its current setpoint (as far as I currently know), temperature is set by pressing
-down enough times to reach the lowest setting, then pressing up the right number of
-times. This takes a few seconds and needs a one-time calibration (see below).
+Each button is "pressed" by briefly turning on an optocoupler (a PC817) that connects the button's two pads together.
+An I2C expander (MCP23017) provides the output pins. The ESP32's HTTPS server listens only on its WireGuard address.
+Every request carries a signature over a one-time nonce (ECDSA P-256), checked against the public keys stored on the
+device. The full protocol is in [`docs/api.md`](docs/api.md).
 
 ## What you need
 
@@ -65,11 +63,13 @@ times. This takes a few seconds and needs a one-time calibration (see below).
 
 | Item | Notes |
 |---|---|
-| LilyGO T-SIM7670G-S3 **Standard** board | ESP32-S3 with a cellular modem. The modem is not used yet. Remove the 18650 battery holder. |
-| MCP23017 I2C expander breakout | Provides the output pins |
-| 6 x PC817 optocouplers | One per button, or two 4-channel PC847 chips |
-| 6 x 220 ohm and 6 x 10 kohm resistors | LED resistors and pull-downs |
-| 6 x momentary push buttons | Bench testing only |
+| LilyGO T-SIM7670G-S3 **Standard** board | ESP32-S3 with a cellular modem and GPS. Remove the 18650 battery holder. |
+| Cellular SIM | Any IoT data SIM. I use Telnyx (APN `data00.telnyx`), about $2 a month plus data. |
+| MCP23017 I2C expander breakout | I use a Waveshare board (address 0x27) |
+| PC817 optocouplers | One per button (8 channels in use, 9 counting the disabled power button, see below), or PC847 4-channel chips |
+| 220 ohm and 10 kohm resistors | LED resistors and pull-downs, one of each per channel |
+| A computer or router that runs WireGuard | I use an OpenWrt router, see [`docs/wireguard-server.md`](docs/wireguard-server.md) |
+| An iDatastart HCXG0 remote-start module (optional) | See [`docs/idatastart.md`](docs/idatastart.md) |
 | 30 AWG wire | Thin and flexible so you do not lift pads off the panel |
 
 For a car installation you will also need:
@@ -82,13 +82,15 @@ For a car installation you will also need:
 
 ### Software
 
-- [PlatformIO](https://platformio.org/) (command line or the VS Code extension)
-- Git
+- [PlatformIO](https://platformio.org/) (command line or the VS Code extension). Its ESP32 platform needs
+  Python 3.10-3.13 on the machine that runs it.
+- Git, OpenSSL (for the certificate script)
+- Python 3.14 and `pip` if you want to run the Home Assistant tests (they use Home Assistant's own test package)
 
 ## Building the hardware
 
 > Always start on the bench with LEDs instead of the car. Only connect to the climate
-> panel once the bench tests below pass.
+> panel once each output behaves.
 
 ### 1. Wire one output channel
 
@@ -102,8 +104,7 @@ PC817 pin 4 (collector)   --> panel pad (the pad that sits at 5 V)
 PC817 pin 3 (emitter)     --> panel ground pad
 ```
 
-For bench testing, replace the panel pads with a 5 V source, a 1 kohm resistor, and an
-LED, so you can see each press.
+For bench testing, replace the panel pads with a 5 V source, a 1 kohm resistor, and an LED, so you can see each press.
 
 ### 2. Connect the expander
 
@@ -111,114 +112,139 @@ LED, so you can see each press.
 |---|---|
 | VDD / RESET | 3.3 V |
 | VSS | GND |
-| A0, A1, A2 | GND (address 0x20) |
+| A0, A1, A2 | per your board (the firmware expects address 0x27, set in `src/config.h`) |
 | SDA | GPIO 3 |
 | SCL | GPIO 2 |
 
-### 3. Assign the channels
+### 3. Channels and other pins
 
-| Function | Expander pin | Bench button GPIO |
-|---|---|---|
-| Temperature up | GPA0 | 15 |
-| Temperature down | GPA1 | 16 |
-| Driver seat heater | GPA2 | 14 |
-| Passenger seat heater | GPA3 | 21 |
-| Front defrost | GPA4 | 38 |
-| Rear defrost | GPA5 | 39 |
+| Function | Expander pin |
+|---|---|
+| Temperature up / down | GPB0 / GPA7 |
+| Driver / passenger seat heater | GPA6 / GPA5 |
+| Front / rear defrost | GPA4 / GPA3 |
+| Fan speed up / down | GPA2 / GPA1 |
+| Climate power button (disabled in firmware) | GPA0 |
 
-Wire each bench button between its GPIO and GND. An optional 12 V battery sense uses
-GPIO 9 through a 220 kohm / 47 kohm divider and a 100 nF capacitor.
+| Function | ESP32 GPIO |
+|---|---|
+| Remote-start trigger output (to a PC817) | 40 |
+| Engine-running input (module's "ground while running", with a series resistor) | 39 |
 
-These pins are for the Standard version of the LilyGO board. Do not use GPIOs 4, 5, 6,
-7, 8, 42 or 46: they are connected to the modem and other on-board parts. Check that
-GPIOs 9, 14 and 21 are brought out on your board's headers, or change them in
-[`src/pins.h`](src/pins.h).
+These pins are for the Standard version of the LilyGO board. Do not use GPIOs 4, 5, 6, 7, 8, 42 or 46: they are
+connected to the modem and other on-board parts. All pins are defined in [`src/config.h`](src/config.h).
 
 ### 4. Connect to the climate panel (later)
 
-The temperature dial on the CX-5 is a small spring-return switch with three pads in a
-row on the top side. With a multimeter, confirm which pad is ground and which pads drop
-to 0 V when pressed. The other buttons are simple two-pad push buttons. Connect one
-optocoupler per button: collector to the pad that sits at 5 V, emitter to the ground pad.
+The temperature dial on the CX-5 is a small spring-return switch with three pads in a row on the top side. With a
+multimeter, confirm which pad is ground and which pads drop to 0 V when pressed. The other buttons are simple two-pad
+push buttons. Connect one optocoupler per button: collector to the pad that sits at 5 V, emitter to the ground pad.
 
-Pad voltages and layouts differ between models and model years. Measure before you
-connect anything.
+Pad voltages and layouts differ between models and model years. Measure before you connect anything.
 
 ## Building the software
 
-PlatformIO runs on Windows, macOS and Linux. The project has been built on Linux,
-and a Linux or macOS machine is the easiest place to build it.
+PlatformIO runs on Windows, macOS and Linux.
 
 ```bash
-git clone <this-repository-url>
-cd esp32-mazda-controller
-pio run                  # build
-pio run -t upload        # flash the board over USB
-pio device monitor       # open the serial console at 115200 baud
+git clone https://github.com/JTris1/mazda-cx5-controller.git
+cd mazda-cx5-controller
 ```
 
-If the upload fails, put the board into download mode: hold BOOT, tap RESET, then
-release BOOT, and try again.
+### 1. Secrets (not in the repository)
+
+Two files are deliberately untracked, because they contain keys:
+
+1. `src/secrets.h`: copy [`src/secrets.example.h`](src/secrets.example.h) and fill in your APN, WireGuard keys and
+   endpoint. Set up the WireGuard side first, see [`docs/wireguard-server.md`](docs/wireguard-server.md).
+2. `src/tls_cert.h`: run `tools/gen_cert.sh` (needs OpenSSL). It prints the certificate's SHA-256 fingerprint, which
+   Home Assistant pins. Generating a new one later changes the fingerprint, so keep the file.
+
+### 2. Build and flash
+
+```bash
+pio run                  # build (also embeds web/admin.html)
+pio run -t upload        # flash the board over USB
+pio device monitor       # serial console at 115200 baud
+```
+
+If the upload fails, put the board into download mode: hold BOOT, tap RESET, then release BOOT, and try again.
+On Linux you may need to add yourself to the `dialout` group to open the serial port.
+
+After the first flash, later updates can be sent over the air from the admin page (slow over cellular, about
+10 KB/s), but a USB flash is the safe choice for risky changes.
+
+### 3. Enroll your first key
+
+Over the tunnel, open `https://192.168.10.2/admin` (or your tunnel address), accept the certificate warning after
+comparing the fingerprint, and choose "Create the first admin key". See [`docs/admin-page.md`](docs/admin-page.md).
+Add a `control` key for Home Assistant, see [`docs/home-assistant.md`](docs/home-assistant.md).
 
 ### Using the serial console
 
+Type `help` for the full list. The main commands:
+
 | Command | What it does |
 |---|---|
-| `temp 72` | Set an absolute temperature in degrees F |
-| `temp lo` / `temp hi` | Go to the lowest or highest setting |
+| `temp <F>` | Set an absolute temperature in degrees F (presses down to the lowest value, then up) |
 | `up [n]` / `down [n]` | Step the temperature up or down n times |
-| `seatd [n]` / `seatp [n]` | Press the driver or passenger seat heater button |
-| `deff [n]` / `defr [n]` | Press the front or rear defrost button |
-| `press <ms>` / `gap <ms>` | Set how long each press lasts and the pause between presses |
-| `tempcal <minF> <maxF> <steps> [loOffset]` | Calibrate the temperature range |
-| `stop` | Abort whatever is running |
-| `status` / `help` | Show settings or the command list |
-
-### Calibrating temperature
-
-The defaults (60 to 84 F in 24 steps) are only a starting guess. In the car:
-
-1. Run `temp lo`, then `up` one press at a time and note the first and last
-   temperatures shown and how many presses it takes.
-2. Enter them with `tempcal <min> <max> <steps>`. If the lowest setting is a separate
-   "LO" position below the first number, pass the number of extra presses as `loOffset`.
-3. Test with `temp 72` and adjust.
-
-Calibration is saved on the board and survives a restart.
+| `heater <driver\|passenger> <high\|medium\|low\|off>` | Seat heater level |
+| `defrost <front\|rear> <on\|off>` | Defrost |
+| `fanset <level>` / `fan <up\|down> [n]` | Absolute fan speed, or step it |
+| `hold <ms>`, `gap <ms>`, `range <min> <max>`, `clamp <n>`, `fancfg <speeds> <extra>` | Timing and range settings (saved) |
+| `settings` | Show all saved settings |
+| `start` / `rsenable [on\|off]` / `rscfg ...` / `rswait <sec>` | Remote start trigger, whether the network may use it, pulse settings |
+| `engine` | Engine-running input status |
+| `net` / `wg [restart]` / `api` | Cellular, tunnel and API status |
+| `keylist` / `keyadd` / `keydel` / `keywipe yes` / `authlog` | Manage client keys |
+| `bench <name> <sec>` | Hold one output on for metering |
+| `i2c` | Show the expander's registers |
 
 ## Testing
 
-A step-by-step test plan lives in [`docs/bench-test.md`](docs/bench-test.md). It starts
-with verifying the board boots and finds the expander, then each channel using LEDs,
-reset glitch checks, the buttons, absolute temperature, and finally the car.
+- **On the bench:** the console commands above, with an LED per channel standing in for the panel.
+- **Without the car:** a simulator of the device (`homeassistant/tests/mock_device.py`) speaks the same signed API,
+  and the Home Assistant integration, the API client, the admin page and the update flow are tested against it:
+  ```bash
+  python3.14 -m venv .venv && .venv/bin/pip install -r homeassistant/requirements_test.txt
+  cd homeassistant && ../.venv/bin/python -m pytest
+  ```
+  From `homeassistant/`, `python tests/serve_mock.py` serves the admin page against the simulator at
+  http://127.0.0.1:8765/admin.
+
+## Status
+
+| Area | State |
+|---|---|
+| Climate buttons, remote start with engine confirmation | Working in the car |
+| Cellular + WireGuard + signed HTTPS API | Working |
+| Home Assistant integration | Working |
+| Admin page, tracked state, OTA updates | Written and tested on the simulator; OTA needs more proof |
+| Link watchdog, hang watchdog, flash log | Written and built, not yet verified in the car |
+| Climate power button | Disabled (its panel line misbehaved) |
+| GPS | Tried and abandoned, see `CLAUDE.md` |
 
 ## Roadmap
 
-1. **Bench and in-car testing** of the current firmware (in progress)
-2. **Cellular connection:** the modem stays connected and the ESP32 sleeps lightly, so
-   commands arrive over MQTT within seconds without SMS charges
-3. **Signed commands:** every message is digitally signed so nobody else can control
-   the car
-4. **Remote start trigger** for an aftermarket module, and engine-running detection
-5. **Home Assistant integration** with buttons and status
-6. **Battery protection:** report battery voltage and refuse commands when it is low
-7. **Vehicle data over CAN** for temperature feedback and telemetry
-8. **Climate data over LIN** (maybe, not sure if this is even possible yet)
-8. **A custom PCB** that carries the LilyGO board, so no breadboard is needed
+1. Prove the watchdog, flash log and over-the-air updates in the car
+2. Find out why the device went offline for days (the flash log should show it next time)
+3. Battery protection: report battery voltage and refuse commands when it is low
+4. Vehicle data over CAN for temperature feedback and telemetry (read-only)
+5. A custom PCB that carries the LilyGO board, so no breadboard is needed
 
 ## Project layout
 
 ```
-src/main.cpp      Firmware: command queue, buttons, serial console
-src/mcp23017.h    Small driver for the I2C expander
-src/pins.h        Pin assignments
-src/config.h      Timing and safety limits
-docs/             Bench test plan and design notes
-platformio.ini    Build configuration
+src/                 Firmware (C++/Arduino): api, admin_api, auth, actions, climate, ota, link_watch, flash_log, ...
+src/config.h         Pins, limits and the default settings
+web/admin.html       The admin page (embedded into the firmware at build time)
+homeassistant/       Home Assistant integration (custom_components/cx5_controller), tests and the device simulator
+tools/               cx5_client.py (command-line client), gen_cert.sh, embed_web.py
+docs/                api.md, home-assistant.md, admin-page.md, wireguard-server.md, idatastart.md
+lib/WireGuard-ESP32  Vendored and patched WireGuard library (see its PATCHES.md)
+platformio.ini       Build configuration
+CLAUDE.md            Notes for the AI assistant and for restarting work on a new machine
 ```
-
-Design decisions, the security model, and the reasoning behind the connectivity choices
-are written up in [`docs/design-notes.md`](docs/design-notes.md).
 
 ## Contributing
 
